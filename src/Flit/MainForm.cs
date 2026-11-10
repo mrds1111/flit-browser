@@ -51,8 +51,9 @@ public class MainForm : Form
         Headless = args.Any(a => a == "--mcp");
 
         _sleepAfterSec = 60;
-        _userDataDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Flit", "Default");
+        _userDataDir = string.IsNullOrWhiteSpace(AgentCfg.Profile)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Flit", "Default")
+            : Path.Combine(AgentConfig.ConfigDir, "profiles", AgentCfg.Profile); // M4: profil terpisah
 
         var urls = new List<string>();
         foreach (var a in args)
@@ -177,6 +178,8 @@ public class MainForm : Form
             AdditionalBrowserArguments = "--disable-blink-features=AutomationControlled",
         };
         if (!string.IsNullOrEmpty(AgentCfg.Language)) opts.Language = AgentCfg.Language;   // S1: --lang
+        if (!string.IsNullOrEmpty(AgentCfg.Proxy))                                          // M4: proxy
+            opts.AdditionalBrowserArguments += " --proxy-server=" + AgentCfg.Proxy;
         return await CoreWebView2Environment.CreateAsync(userDataFolder: _userDataDir, options: opts);
     }
 
@@ -243,6 +246,9 @@ public class MainForm : Form
         {
             return t;
         }
+        // skema lain yang jelas (chrome://, file://, about:) — jangan dibuang ke pencarian
+        int scheme = t.IndexOf("://", StringComparison.Ordinal);
+        if (scheme > 0 && scheme <= 10 && t.Take(scheme).All(char.IsLetter)) return t;
         return LooksLikeUrl(t) ? NormalizeUrl(t) : SearchUrl + Uri.EscapeDataString(t);
     }
 
@@ -289,6 +295,25 @@ public class MainForm : Form
         // S1: UA per-profil (override engine, diterapkan pada tiap WebView2 baru)
         if (!string.IsNullOrEmpty(AgentCfg.UserAgent))
             w.CoreWebView2.Settings.UserAgent = AgentCfg.UserAgent;
+
+        // S2 (M4): identitas koheren — UA kustom dipasang baru kita lengkapi
+        // platform/bahasa/zona-waktu/core agar satu cerita. Script kecil (<3 KB).
+        var identity = AgentCfg.BuildIdentity();
+        if (identity is not null)
+        {
+            try
+            {
+                var idJs = Stealth.Identity.BuildScript(identity);
+                await w.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(idJs);
+                // dokumen saat ini (mis. dibuat sebelum config siap) ikut dipatch
+                _ = w.CoreWebView2.ExecuteScriptAsync(idJs);
+                AgentLog.Write("stealth.s2_injected", new { platform = identity.Platform, tz = identity.Timezone, len = idJs.Length });
+            }
+            catch (Exception ex)
+            {
+                AgentLog.Write("stealth.s2_fail", ex.Message);
+            }
+        }
 
         w.CoreWebView2.DocumentTitleChanged += (s, _) =>
         {
@@ -616,7 +641,7 @@ public class MainForm : Form
         });
         mi.DropDownItems.Add(adItem);
         mi.DropDownItems.Add(Item("Tentang Flit", (s, e) =>
-            MessageBox.Show("Flit Browser 0.3 (M3)\nOne browser, both of us.\n\nWebView2 (Chromium Evergreen) • MPL-2.0\nAdblock: EasyList/EasyPrivacy/ABPindo (CC BY-SA 3.0)",
+            MessageBox.Show("Flit Browser 0.4 (M4)\nOne browser, both of us.\n\nWebView2 (Chromium Evergreen) • MPL-2.0\nAdblock: EasyList/EasyPrivacy/ABPindo (CC BY-SA 3.0)",
                 "Tentang Flit", MessageBoxButtons.OK, MessageBoxIcon.Information)));
 
         var bm = new ToolStripMenuItem("Bookmark") { ForeColor = fg };
@@ -986,6 +1011,8 @@ public class MainForm : Form
 
     private string McpCloseTool(JsonElement args)
     {
+        if (AgentCfg.RequireConfirm && !ArgBool(args, "confirm", false))
+            throw new McpToolError("Aksi destruktif: tambahkan confirm:true (atau matikan --require-confirm).");
         var idx = ArgInt(args, "index", -1);
         if (idx < 0 || idx >= _tabs.Count) throw new McpToolError($"index {idx} tidak ada");
         CloseTab(idx);
@@ -1187,6 +1214,8 @@ public class MainForm : Form
         if (!AgentCfg.AllowEvaluate)
             throw new McpToolError(
                 "flit_evaluate_js nonaktif. Nyalakan via agent.allowEvaluate=true di config.json atau --allow-evaluate.");
+        if (AgentCfg.RequireConfirm && !ArgBool(args, "confirm", false))
+            throw new McpToolError("Aksi destruktif: tambahkan confirm:true (atau matikan --require-confirm).");
         var tab = ResolveTab(args);
         WakeTab(tab);
         if (tab.Web?.CoreWebView2 is null) throw new McpToolError("Engine tab belum siap");
@@ -1207,8 +1236,8 @@ public class MainForm : Form
         return JsonSerializer.Serialize(new
         {
             name = "Flit",
-            version = "0.3.0",
-            milestone = "M3",
+            version = "0.4.0",
+            milestone = "M4",
             tabs = _tabs.Count,
             active = _active,
             headless = Headless,

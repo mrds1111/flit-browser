@@ -81,13 +81,13 @@ RAM idle ≤150 MB • 20 tab latar tidur ≤ +400 MB • startup <1,5 s • sna
 | **M1** ✅ 2026-11-11 | MVP: multi-tab + suspend otomatis — [M1-RESULT.md] (find-in-page pindah ke M3; MCP tools dikerjakan di M2) | S1 dasar |
 | **M2** ✅ 2026-11-11 | MCP server headless (11 tools) + izin per-domain + activity log + headless mode — [M2-RESULT.md] (konfirmasi aksi sensitif menyusul di M3) | S1 dasar terverifikasi (webdriver=false); identitas per-profil + proxy → M4 |
 | **M3** ✅ 2026-11-11 | Manusia lengkap: bookmark/history/find-UI/save/download + **adblock** (101.545 aturan network + cosmetic, bukti [M3-RESULT.md]) | — |
-| **M4** ⏳ | Stealth S2 (injeksi koheren) + profil per-identitas + backend Lightpanda opsional + sidecar captcha + eskalasi adblock-rust jika perlu + **konfirmasi aksi sensitif** (digeser dari M3) | S2–S3 |
+| **M4** ✅ 2026-11-11 | Stealth S2 (injeksi koheren, bukti [M4-RESULT.md]) + profil per-identitas + proxy + gerbang confirm + omnibox skema. Backend opsional (Lightpanda/captcha/adblock-rust) = **keputusan terdokumentasi: tidak dibangun v1.0** (alasan di M4-RESULT) | S2–S3 |
 
 ## 8. Keputusan terkunci vs terbuka
 
 **Terkunci:** engine WebView2 • agent = CDP+MCP a11y-first • adblock = engine sendiri bertahap • stealth = opt-in per-profil di level shell/injeksi/driver (fork Gecko untuk "edisi stealth" **diizinkan pemilik** sebagai eskalasi masa depan dengan kredit + lisensi) • captcha = sidecar terpisah • tanpa sync/telemetri/chatbot bawaan • nama produk = **Flit / Flit Browser** (terkunci 2026-11-10) • lisensi proyek = **MPL-2.0** (terkunci 2026-11-11; kriteria pemilik: aman dari tuntutan hukum) • stack shell = **C# .NET 10 + WinForms** (terkunci 2026-11-11; naik dari .NET 8 karena dukungan .NET 8 berakhir Nov 2026, .NET 10 LTS s/d Nov 2028 + dark mode built-in).
 
-**Terbuka:** [x] ~~verifikasi mekanik stealth S1/headless~~ — **terverifikasi empiris 2026-11-11** (M2): `navigator.webdriver=false` via AutomationControlled; mode `--mcp` headless (jendela tak tampil, WebView2 jalan penuh, exit bersih) — bukti di [M2-RESULT.md]. [ ] identitas per-profil + proxy (S1 penuh, M4).
+**Terbuka:** [x] ~~verifikasi mekanik stealth S1/headless~~ — **terverifikasi empiris 2026-11-11** (M2): `navigator.webdriver=false` via AutomationControlled; mode `--mcp` headless (jendela tak tampil, WebView2 jalan penuh, exit bersih) — bukti di [M2-RESULT.md]. [x] ~~identitas per-profil + proxy (S1 penuh)~~ — **selesai 2026-11-11** (M4): `--profile=` + `--proxy=` + identitas koheren S2, bukti di [M4-RESULT.md].
 
 ## 9. Risiko terbesar (peringkat)
 

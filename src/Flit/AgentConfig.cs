@@ -20,6 +20,27 @@ public class AgentConfig
     /// <summary>S1: bahasa engine (mis. "id-ID"). Kosong = default OS.</summary>
     public string Language { get; set; } = "";
 
+    /// <summary>S2: zona waktu IANA (mis. "Asia/Jakarta"). Kosong = native. Butuh --ua terpasang.</summary>
+    public string Timezone { get; set; } = "";
+
+    /// <summary>S2: paksa navigator.platform (mis. "MacIntel"). Kosong = diturunkan dari UA.</summary>
+    public string Platform { get; set; } = "";
+
+    /// <summary>S2: navigator.hardwareConcurrency. Default 8.</summary>
+    public int HardwareConcurrency { get; set; } = 8;
+
+    /// <summary>S2: navigator.deviceMemory (GiB, Chrome melaporkan 2/4/8). Default 8.</summary>
+    public int DeviceMemory { get; set; } = 8;
+
+    /// <summary>M4: proxy Chromium, mis. "http://127.0.0.1:8888". Kosong = tanpa proxy.</summary>
+    public string Proxy { get; set; } = "";
+
+    /// <summary>M4: nama profil — folder data (cookie/riwayat/cache) terpisah %LOCALAPPDATA%\Flit\profiles\&lt;nama&gt;.</summary>
+    public string Profile { get; set; } = "";
+
+    /// <summary>M4: tool MCP destruktif (close tab, evaluate) wajib membawa confirm:true.</summary>
+    public bool RequireConfirm { get; set; } = false;
+
     /// <summary>M3: adblock bawaan (network + cosmetic). Default NYALA.</summary>
     public bool AdblockEnabled { get; set; } = true;
 
@@ -60,7 +81,58 @@ public class AgentConfig
                 UserAgent = a["--ua=".Length..];
             else if (a.StartsWith("--lang=", StringComparison.Ordinal))
                 Language = a["--lang=".Length..];
+            else if (a.StartsWith("--timezone=", StringComparison.Ordinal))
+                Timezone = a["--timezone=".Length..];
+            else if (a.StartsWith("--platform=", StringComparison.Ordinal))
+                Platform = a["--platform=".Length..];
+            else if (a.StartsWith("--proxy=", StringComparison.Ordinal))
+                Proxy = a["--proxy=".Length..];
+            else if (a.StartsWith("--profile=", StringComparison.Ordinal))
+                Profile = a["--profile=".Length..];
+            else if (a == "--require-confirm") RequireConfirm = true;
         }
+    }
+
+    /// <summary>
+    /// Susun identitas koheren S2 dari config. Null = jangan injeksi apa pun
+    /// (tanpa UA kustom, identitas native sudah koheren — mengotak-atik justru menambah jejak).
+    /// </summary>
+    public Stealth.IdentityProfile? BuildIdentity()
+    {
+        if (string.IsNullOrWhiteSpace(UserAgent)) return null;
+        var id = new Stealth.IdentityProfile
+        {
+            UserAgent = UserAgent,
+            Language = string.IsNullOrWhiteSpace(Language) ? "id-ID" : Language.Trim(),
+            Timezone = Timezone?.Trim() ?? "",
+            HardwareConcurrency = HardwareConcurrency > 0 ? HardwareConcurrency : 8,
+            DeviceMemory = DeviceMemory > 0 ? DeviceMemory : 8,
+        };
+        id.Languages = id.Language.Equals("en-US", StringComparison.OrdinalIgnoreCase)
+            ? new[] { "en-US" } : new[] { id.Language, "en-US" };
+
+        // platform konsisten dengan UA (platform nyata mesin tidak boleh bocor)
+        if (!string.IsNullOrWhiteSpace(Platform)) id.Platform = Platform.Trim();
+        else if (UserAgent.Contains("Macintosh", StringComparison.Ordinal)) { id.Platform = "MacIntel"; id.UadPlatform = "macOS"; }
+        else if (UserAgent.Contains("iPhone", StringComparison.Ordinal) || UserAgent.Contains("iPad", StringComparison.Ordinal)) { id.Platform = "iPhone"; id.UadPlatform = "iOS"; }
+        else if (UserAgent.Contains("Android", StringComparison.Ordinal)) { id.Platform = "Linux armv8l"; id.UadPlatform = "Android"; }
+        else if (UserAgent.Contains("Linux", StringComparison.Ordinal)) { id.Platform = "Linux x86_64"; id.UadPlatform = "Linux"; }
+        // selain itu: Win32 / Windows (default field)
+
+        if (id.Timezone.Length > 0)
+        {
+            try
+            {
+                // Windows 11 + ICU: ID IANA ("Asia/Jakarta") didukung langsung
+                var tz = TimeZoneInfo.FindSystemTimeZoneById(id.Timezone);
+                id.TimezoneOffsetMinutes = -(int)tz.GetUtcOffset(DateTime.UtcNow).TotalMinutes;
+            }
+            catch
+            {
+                id.Timezone = ""; // zona tak dikenal → biarkan native (jangan setengah-setengah)
+            }
+        }
+        return id;
     }
 
     /// <summary>Gerbang domain: kosong = lolos; ada whitelist = host harus sama/subdomain.</summary>

@@ -3,6 +3,14 @@
     "allowedDomains": [],
     "allowEvaluate": false,
     "userAgent": "",
-    "language": ""
+    "language": "",
+    "timezone": "",
+    "platform": "",
+    "hardwareConcurrency": 8,
+    "deviceMemory": 8,
+    "proxy": "",
+    "profile": "",
+    "requireConfirm": false,
+    "adblockEnabled": true
   }
 }
