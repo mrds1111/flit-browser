@@ -12,23 +12,52 @@ public class MainForm : Form
     // Search engine default — satu konstanta; jadi setting pengguna di M3
     private const string SearchUrl = "https://duckduckgo.com/?q=";
 
+    // Halaman tab baru — inline, gelap, tanpa akses disk
+    private const string NewTabHtml =
+        """<!doctype html><html><head><meta charset="utf-8"><title>Tab Baru</title><style>body{background:#202124;color:#e8eaed;font-family:'Segoe UI',sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}main{text-align:center}h1{font-weight:300;font-size:42px;letter-spacing:8px;margin-bottom:4px}p{color:#9aa0a6;margin:6px 0}a{color:#8ab4f8;text-decoration:none;margin:0 10px;font-size:15px}a:hover{text-decoration:underline}</style></head><body><main><h1>FLIT</h1><p><em>One browser, both of us.</em></p><p style="margin-top:28px"><a href="https://duckduckgo.com">DuckDuckGo</a><a href="https://github.com">GitHub</a><a href="https://id.wikipedia.org">Wikipedia</a><a href="https://news.ycombinator.com">Hacker News</a></p></main></body></html>""";
+
+    private readonly List<FlitTab> _tabs = new();
+    private readonly TabStrip _tabStrip;
+    private readonly Panel _host = new() { Dock = DockStyle.Fill, BackColor = Color.FromArgb(32, 33, 36) };
     private readonly TextBox _omnibox;
     private readonly Label _status;
     private readonly Label _ram;
-    private readonly WebView2 _webView;
-    private readonly Panel _sleeper;
     private readonly System.Windows.Forms.Timer _ramTimer;
-    private bool _suspended;
+    private readonly System.Windows.Forms.Timer _sleepSweep;
+    private readonly List<string> _initialUrls;
+    private readonly int _sleepAfterSec; // default 60 dtk; override via --sleep-after=N (benchmark)
+    private readonly string _userDataDir;
+    private CoreWebView2Environment? _env;
+    private int _active = -1;
 
-    public MainForm()
+    public MainForm(string[] args)
     {
-        // Chrome Flit digambar sendiri — dark mode = pilih warna gelap, pasti 100% gelap
-        Color bg = Color.FromArgb(32, 33, 36);        // latar utama
-        Color chromeBg = Color.FromArgb(43, 43, 43);  // tab bar / omnibox
-        Color fg = Color.FromArgb(232, 234, 237);     // teks terang
-        Color dim = Color.FromArgb(154, 160, 166);    // teks redup
+        _sleepAfterSec = 60;
+        _userDataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Flit", "M1");
 
-        Text = "Flit — M0.1";
+        var urls = new List<string>();
+        foreach (var a in args)
+        {
+            if (a.StartsWith("--sleep-after=", StringComparison.Ordinal) &&
+                int.TryParse(a["--sleep-after=".Length..], out var sec))
+            {
+                _sleepAfterSec = Math.Max(3, sec);
+            }
+            else if (!a.StartsWith("--", StringComparison.Ordinal))
+            {
+                urls.Add(NormalizeUrl(a));
+            }
+        }
+        _initialUrls = urls;
+
+        // Chrome Flit digambar sendiri — dark mode = pilih warna gelap, pasti 100% gelap
+        Color bg = Color.FromArgb(32, 33, 36);
+        Color chromeBg = Color.FromArgb(43, 43, 43);
+        Color fg = Color.FromArgb(232, 234, 237);
+        Color dim = Color.FromArgb(154, 160, 166);
+
+        Text = "Flit — M1";
         ClientSize = new Size(1200, 800);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = bg;
@@ -41,7 +70,6 @@ public class MainForm : Form
             BackColor = Color.FromArgb(60, 60, 64),
             ForeColor = fg,
         };
-
         _status = new Label
         {
             Dock = DockStyle.Fill,
@@ -65,49 +93,32 @@ public class MainForm : Form
         bottomRow.Controls.Add(_ram, 1, 0);
         bottom.Controls.Add(bottomRow);
 
-        _webView = new WebView2
-        {
-            Dock = DockStyle.Fill,
-            DefaultBackgroundColor = bg,
-        };
+        // Baris chrome: [←] [→] [⟳] [omnibox] [Go]
+        var navRow = new Panel { Dock = DockStyle.Fill, BackColor = chromeBg, Padding = new Padding(6, 7, 6, 7) };
+        var nav = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 1, Margin = Padding.Empty, BackColor = chromeBg };
+        nav.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        nav.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        nav.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        nav.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        nav.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        nav.Controls.Add(NavButton("←", () => { var w = Current?.Web; if (w is { CanGoBack: true }) w.GoBack(); }), 0, 0);
+        nav.Controls.Add(NavButton("→", () => { var w = Current?.Web; if (w is { CanGoForward: true }) w.GoForward(); }), 1, 0);
+        nav.Controls.Add(NavButton("⟳", () => { if (Current?.Web?.CoreWebView2 is not null) Current!.Web!.Reload(); }), 2, 0);
+        nav.Controls.Add(_omnibox, 3, 0);
+        nav.Controls.Add(NavButton("Go", Navigate), 4, 0);
+        navRow.Controls.Add(nav);
 
-        // Overlay "tab tertidur" — menutupi webview saat disuspend (simulasi tab latar)
-        _sleeper = new Panel { Dock = DockStyle.Fill, BackColor = bg, Visible = false };
-        var sleepLabel = new Label
-        {
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleCenter,
-            ForeColor = dim,
-            Font = new Font("Segoe UI", 14f),
-            Text = "💤  Tab tertidur\n\nklik untuk membangunkan",
-        };
-        sleepLabel.Click += (s, e) => WakeTab();
-        _sleeper.Click += (s, e) => WakeTab();
-        _sleeper.Controls.Add(sleepLabel);
+        _tabStrip = new TabStrip(_tabs);
+        _tabStrip.TabSelected += i => ActivateTab(i);
+        _tabStrip.TabClosed += CloseTab;
+        _tabStrip.NewTabRequested += () => _ = OpenTabAsync(null);
 
-        var host = new Panel { Dock = DockStyle.Fill, BackColor = bg };
-        host.Controls.Add(_webView);
-        host.Controls.Add(_sleeper); // z-order: di atas webview, awalnya disembunyikan
-
-        // Baris chrome: [←] [→] [⟳] [omnibox] [Go] [💤]
-        var chrome = new Panel { Dock = DockStyle.Top, Height = 44, BackColor = chromeBg, Padding = new Padding(6, 7, 6, 7) };
-        var row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 6, RowCount = 1, Margin = Padding.Empty, BackColor = chromeBg };
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        row.Controls.Add(NavButton("←", () => { if (_webView.CanGoBack) _webView.GoBack(); }), 0, 0);
-        row.Controls.Add(NavButton("→", () => { if (_webView.CanGoForward) _webView.GoForward(); }), 1, 0);
-        row.Controls.Add(NavButton("⟳", () => { if (_webView.CoreWebView2 is not null && !_suspended) _webView.Reload(); }), 2, 0);
-        row.Controls.Add(_omnibox, 3, 0);
-        row.Controls.Add(NavButton("Go", Navigate), 4, 0);
-        row.Controls.Add(NavButton("💤", SleepTab), 5, 0);
-        chrome.Controls.Add(row);
+        var chrome = new Panel { Dock = DockStyle.Top, Height = 82, BackColor = chromeBg };
+        chrome.Controls.Add(navRow);   // Dock=Fill (di bawah tab strip)
+        chrome.Controls.Add(_tabStrip); // Dock=Top (baris atas)
 
         // Urutan penambahan menentukan docking: Fill dulu, lalu Top, lalu Bottom
-        Controls.Add(host);
+        Controls.Add(_host);
         Controls.Add(chrome);
         Controls.Add(bottom);
 
@@ -120,7 +131,14 @@ public class MainForm : Form
         _ramTimer = new System.Windows.Forms.Timer { Interval = 3000 };
         _ramTimer.Tick += (s, e) => UpdateRam();
         _ramTimer.Start();
+
+        // Sapuan tidur: tab latar yang sudah selesai load > N detik → TrySuspend
+        _sleepSweep = new System.Windows.Forms.Timer { Interval = 5000 };
+        _sleepSweep.Tick += (s, e) => SweepSleep();
+        _sleepSweep.Start();
     }
+
+    private FlitTab? Current => (_active >= 0 && _active < _tabs.Count) ? _tabs[_active] : null;
 
     private Button NavButton(string label, Action onClick)
     {
@@ -140,30 +158,27 @@ public class MainForm : Form
         return b;
     }
 
-    private void Navigate()
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
-        if (_webView.CoreWebView2 is null) return;
-        var input = _omnibox.Text.Trim();
-        if (input.Length == 0) return;
+        switch (keyData)
+        {
+            case Keys.Control | Keys.T: _ = OpenTabAsync(null); return true;
+            case Keys.Control | Keys.W: CloseTab(_active); return true;
+            case Keys.Control | Keys.L: _omnibox.Focus(); _omnibox.SelectAll(); return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
 
-        string url;
+    private static string NormalizeUrl(string input)
+    {
         if (input.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
             input.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
-            url = input;                                    // URL eksplisit
+            return input;
         }
-        else if (LooksLikeUrl(input))
-        {
-            url = "https://" + input;                       // domain tanpa skema → https
-        }
-        else
-        {
-            url = SearchUrl + Uri.EscapeDataString(input);  // sisanya → pencarian
-        }
-        _webView.CoreWebView2.Navigate(url);
+        return "https://" + input;
     }
 
-    // Heuristik ala omnibox: "github.com" = URL, "github" = kata kunci pencarian
     private static bool LooksLikeUrl(string s)
     {
         if (s.Contains(' ')) return false;
@@ -172,28 +187,167 @@ public class MainForm : Form
         return dot > 0 && dot < s.Length - 1 && !s.EndsWith(".", StringComparison.Ordinal);
     }
 
-    // M0.1: tidurkan tab — sembunyikan webview lalu TrySuspend (prasyarat resmi: IsVisible=false)
-    private async void SleepTab()
+    private void Navigate()
     {
-        if (_webView.CoreWebView2 is null || _suspended) return;
-        _suspended = true;
-        _sleeper.Visible = true;
-        _sleeper.BringToFront();
-        _webView.Visible = false; // controller.IsVisible=false — prasyarat suspend
-        var ok = await _webView.CoreWebView2.TrySuspendAsync();
-        _status.Text = ok
-            ? "💤 Tab tertidur (TrySuspend OK) — pantau RAM di kanan bawah turun, klik layar untuk bangun"
-            : "TrySuspend gagal — tab hanya disembunyikan (suspend umumnya menolak bila WebView terlihat)";
-        UpdateRam();
+        var tab = Current;
+        if (tab?.Web?.CoreWebView2 is null) return;
+        var input = _omnibox.Text.Trim();
+        if (input.Length == 0) return;
+
+        string url = input.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                     input.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            ? input
+            : LooksLikeUrl(input)
+                ? NormalizeUrl(input)
+                : SearchUrl + Uri.EscapeDataString(input);
+
+        tab.Url = url;
+        tab.Web.CoreWebView2.Navigate(url);
     }
 
-    private void WakeTab()
+    private async Task OpenTabAsync(string? url, bool activate = true)
     {
-        if (!_suspended) return;
-        _webView.Visible = true;  // controller.IsVisible=true → WebView2 auto-resume
-        _suspended = false;
-        _sleeper.Visible = false;
-        _status.Text = "Tab bangun kembali";
+        var tab = new FlitTab { Url = url ?? string.Empty };
+        _tabs.Add(tab);
+        await EnsureWebAsync(tab);
+
+        if (activate) ActivateTab(_tabs.Count - 1);
+        else _tabStrip.Invalidate();
+    }
+
+    private async Task EnsureWebAsync(FlitTab tab)
+    {
+        if (tab.Web is not null) return;
+
+        // Environment dibuat sekali & dipakai bersama → browser proses juga satu (hemat RAM)
+        _env ??= await CoreWebView2Environment.CreateAsync(userDataFolder: _userDataDir);
+
+        var w = new WebView2
+        {
+            Dock = DockStyle.Fill,
+            Visible = false,
+            DefaultBackgroundColor = Color.FromArgb(32, 33, 36),
+            Tag = tab,
+        };
+        _host.Controls.Add(w);
+        tab.Web = w;
+        await w.EnsureCoreWebView2Async(_env);
+
+        w.CoreWebView2.DocumentTitleChanged += (s, _) =>
+        {
+            tab.Title = string.IsNullOrEmpty(w.CoreWebView2.DocumentTitle) ? "Tab Baru" : w.CoreWebView2.DocumentTitle;
+            if (ReferenceEquals(Current, tab)) Text = tab.Title + " — Flit";
+            _tabStrip.Invalidate();
+        };
+        w.CoreWebView2.NavigationStarting += (s, _) =>
+        {
+            tab.IsLoading = true;
+            _tabStrip.Invalidate();
+        };
+        w.CoreWebView2.NavigationCompleted += (s, _) =>
+        {
+            tab.IsLoading = false;
+            // Tab latar mulai hitung mundur tidur setelah selesai memuat
+            tab.BackgroundReadyAt = ReferenceEquals(Current, tab) ? DateTime.MaxValue : DateTime.Now;
+            if (ReferenceEquals(Current, tab))
+            {
+                _status.Text = "Selesai: " + w.CoreWebView2.Source;
+                SyncOmnibox();
+            }
+            _tabStrip.Invalidate();
+        };
+
+        tab.IsLoading = true;
+        if (string.IsNullOrEmpty(tab.Url)) w.CoreWebView2.NavigateToString(NewTabHtml);
+        else w.CoreWebView2.Navigate(tab.Url);
+    }
+
+    private void ActivateTab(int idx)
+    {
+        if (idx < 0 || idx >= _tabs.Count) return;
+
+        if (Current?.Web is { } old)
+        {
+            old.Visible = false;
+            if (!Current!.IsSleeping && !Current.IsLoading) Current.BackgroundReadyAt = DateTime.Now;
+        }
+
+        _active = idx;
+        _tabStrip.SetActive(idx);
+
+        var tab = _tabs[idx];
+        if (tab.Web is { } w)
+        {
+            w.Visible = true;  // controller.IsVisible=true → auto-resume bila tertidur
+            w.BringToFront();
+        }
+        tab.IsSleeping = false;
+        tab.BackgroundReadyAt = DateTime.MaxValue;
+
+        SyncOmnibox();
+        Text = tab.Title + " — Flit";
+        _omnibox.Focus();
+    }
+
+    private void SyncOmnibox()
+    {
+        var tab = Current;
+        if (tab is null) return;
+        _omnibox.Text = tab.Web?.CoreWebView2?.Source is { Length: > 0 } src ? src : tab.Url;
+    }
+
+    private void CloseTab(int idx)
+    {
+        if (idx < 0 || idx >= _tabs.Count) return;
+
+        var tab = _tabs[idx];
+        if (tab.Web is not null)
+        {
+            _host.Controls.Remove(tab.Web);
+            tab.Web.Dispose();   // renderer proses milik tab ini ikut dibuang
+            tab.Web = null;
+        }
+        _tabs.RemoveAt(idx);
+
+        if (_tabs.Count == 0)
+        {
+            _active = -1;
+            _ = OpenTabAsync(null);
+            return;
+        }
+        if (idx == _active) ActivateTab(Math.Min(idx, _tabs.Count - 1));
+        else
+        {
+            if (idx < _active) _active--;
+            _tabStrip.SetActive(_active);
+            _tabStrip.Invalidate();
+        }
+    }
+
+    // M1 inti: tab latar yang selesai memuat > N detik → tidur (TrySuspend)
+    private void SweepSleep()
+    {
+        var now = DateTime.Now;
+        for (int i = 0; i < _tabs.Count; i++)
+        {
+            var tab = _tabs[i];
+            if (i == _active || tab.IsSleeping || tab.Web is null || tab.IsLoading) continue;
+            if (tab.BackgroundReadyAt == DateTime.MaxValue) continue;
+            if ((now - tab.BackgroundReadyAt).TotalSeconds >= _sleepAfterSec)
+                _ = SleepTabAsync(tab);
+        }
+    }
+
+    private async Task SleepTabAsync(FlitTab tab)
+    {
+        if (tab.Web?.CoreWebView2 is null || tab.IsSleeping) return;
+        var ok = await tab.Web.CoreWebView2.TrySuspendAsync();
+        if (ok)
+        {
+            tab.IsSleeping = true;
+            _tabStrip.Invalidate();
+        }
+        // Gagal (mis. tab sedang main audio) → dicoba lagi sweep berikutnya
     }
 
     // RAM = shell + seluruh pohon msedgewebview2 milik Flit (di-filter user-data-folder)
@@ -219,7 +373,6 @@ public class MainForm : Form
 
             double mbWs = ws / 1024.0 / 1024.0, mbPm = pm / 1024.0 / 1024.0;
             _ram.Text = $"RAM: {mbPm:F0} MB private • {mbWs:F0} MB WS";
-            _ram.ForeColor = _suspended ? Color.FromArgb(126, 211, 127) : Color.FromArgb(154, 160, 166);
         }
         catch { /* ticker tidak boleh bikin crash */ }
     }
@@ -234,7 +387,7 @@ public class MainForm : Form
             foreach (ManagementObject o in searcher.Get())
             {
                 var cmd = o["CommandLine"] as string ?? string.Empty;
-                if (cmd.Contains(@"Flit\M0", StringComparison.OrdinalIgnoreCase))
+                if (cmd.Contains(@"\Flit\", StringComparison.OrdinalIgnoreCase))
                 {
                     result.Add(Convert.ToInt32(o["ProcessId"]));
                 }
@@ -247,45 +400,42 @@ public class MainForm : Form
     protected override async void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
-        _omnibox.Select();
 
         try
         {
-            // Profil data terpisah — tidak menyentuh Edge/Chrome yang terpasang
-            var userData = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Flit", "M0");
-            var env = await CoreWebView2Environment.CreateAsync(userDataFolder: userData);
-            await _webView.EnsureCoreWebView2Async(env);
-
-            _webView.CoreWebView2.DocumentTitleChanged += (s, _) =>
-                Text = string.IsNullOrEmpty(_webView.CoreWebView2.DocumentTitle)
-                    ? "Flit — M0.1"
-                    : _webView.CoreWebView2.DocumentTitle + " — Flit";
-
-            _webView.CoreWebView2.NavigationCompleted += (s, _) =>
+            if (_initialUrls.Count == 0)
             {
-                if (!_suspended) _status.Text = $"Selesai: {_webView.CoreWebView2.Source}";
-            };
+                await OpenTabAsync(null);
+            }
+            else
+            {
+                foreach (var url in _initialUrls)
+                {
+                    await OpenTabAsync(url, activate: _tabs.Count == 0);
+                }
+            }
 
-            _omnibox.Text = "https://example.com";
-            _webView.CoreWebView2.Navigate("https://example.com");
-
-            // Bukti CDP M0: tanya engine langsung lewat DevTools Protocol (dibroker internal,
+            // Bukti CDP: tanya engine lewat DevTools Protocol (dibroker internal,
             // tanpa remote debugging port — sesuai spesifikasi FULL-FINAL.md §2)
-            var json = await _webView.CoreWebView2.CallDevToolsProtocolMethodAsync("Browser.getVersion", "{}");
-            using var doc = JsonDocument.Parse(json);
-            var product = doc.RootElement.GetProperty("product").GetString();
-            var ua = doc.RootElement.GetProperty("userAgent").GetString();
-            _status.Text = $"CDP OK: {product}";
-            Console.WriteLine($"[Flit M0] CDP Browser.getVersion -> product={product}");
-
-            UpdateRam();
+            if (Current?.Web?.CoreWebView2 is { } core)
+            {
+                var json = await core.CallDevToolsProtocolMethodAsync("Browser.getVersion", "{}");
+                using var doc = JsonDocument.Parse(json);
+                var product = doc.RootElement.GetProperty("product").GetString();
+                _status.Text = $"CDP OK: {product}";
+            }
         }
         catch (Exception ex)
         {
             _status.Text = "Gagal init WebView2: " + ex.Message;
         }
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        _ramTimer.Stop();
+        _sleepSweep.Stop();
+        base.OnFormClosed(e);
     }
 
     // Title bar gelap di Windows 10/11

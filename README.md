@@ -4,7 +4,7 @@
 
 Browser Windows ringan untuk manusia **dan** AI agent — shell C# .NET 10 + WinForms di atas WebView2 (Chromium Evergreen).
 
-**Status: M0 — prototype** (1 tab + CDP + benchmark RAM → Go/No-Go)
+**Status: M1 — multi-tab + sleeping tabs otomatis** (benchmark: [M1-RESULT.md](M1-RESULT.md))
 
 | Dokumen | Isi |
 |---|---|

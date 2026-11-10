@@ -29,6 +29,8 @@
 
 Alasan: shell WinForms terbukti hanya 15,7 MB private (validasi stack); 202,8 MB private untuk 1 tab **tanpa satu pun optimasi** masih di jalur menuju ≤150 MB — dan daftar optimasi di bawah adalah thesis inti produk, bukan tambal sulam.
 
+**Update 2026-11-11 (M0.1):** `TrySuspendAsync` **terkonfirmasi bekerja** oleh uji langsung pemilik — tab ditidurkan (sem bunyikan + suspend) → RAM pohon proses turun. Mekanisme sleeping-tab valid; langkah berikutnya: otomatis per-tab latar di M1 (tombol manual demo dihapus).
+
 ## Optimasi terjadwal (urut dampak)
 
 1. **TrySuspend/discard tab latar** — inti produk; mengosongkan renderer saat idle (uji M0.1).
