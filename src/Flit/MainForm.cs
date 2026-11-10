@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Management;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using Flit.Mcp;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -30,11 +31,20 @@ public class MainForm : Form
     private CoreWebView2Environment? _env;
     private int _active = -1;
 
+    // ==== M2: mode agent ====
+    public AgentConfig AgentCfg { get; }
+    /// <summary>True pada `--mcp`: jendela tidak pernah ditampilkan (headless).</summary>
+    public bool Headless { get; }
+
     public MainForm(string[] args)
     {
+        AgentCfg = AgentConfig.Load();
+        AgentCfg.ApplyArgs(args);
+        Headless = args.Any(a => a == "--mcp");
+
         _sleepAfterSec = 60;
         _userDataDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Flit", "M1");
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Flit", "Default");
 
         var urls = new List<string>();
         foreach (var a in args)
@@ -138,6 +148,18 @@ public class MainForm : Form
         _sleepSweep.Start();
     }
 
+    private async Task<CoreWebView2Environment> CreateEnvAsync()
+    {
+        // S1 stealth dasar (M2): buang penanda automation bawaan Chromium
+        // (--disable-blink-features=AutomationControlled → navigator.webdriver = false)
+        var opts = new CoreWebView2EnvironmentOptions
+        {
+            AdditionalBrowserArguments = "--disable-blink-features=AutomationControlled",
+        };
+        if (!string.IsNullOrEmpty(AgentCfg.Language)) opts.Language = AgentCfg.Language;   // S1: --lang
+        return await CoreWebView2Environment.CreateAsync(userDataFolder: _userDataDir, options: opts);
+    }
+
     private FlitTab? Current => (_active >= 0 && _active < _tabs.Count) ? _tabs[_active] : null;
 
     private Button NavButton(string label, Action onClick)
@@ -187,6 +209,18 @@ public class MainForm : Form
         return dot > 0 && dot < s.Length - 1 && !s.EndsWith(".", StringComparison.Ordinal);
     }
 
+    /// <summary>Input omnibox/agent → URL final: skema eksplisit langsung; mirip-URL kasih https; sisanya pencarian.</summary>
+    private static string ResolveInput(string input)
+    {
+        var t = input.Trim();
+        if (t.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            t.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return t;
+        }
+        return LooksLikeUrl(t) ? NormalizeUrl(t) : SearchUrl + Uri.EscapeDataString(t);
+    }
+
     private void Navigate()
     {
         var tab = Current;
@@ -194,13 +228,7 @@ public class MainForm : Form
         var input = _omnibox.Text.Trim();
         if (input.Length == 0) return;
 
-        string url = input.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                     input.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-            ? input
-            : LooksLikeUrl(input)
-                ? NormalizeUrl(input)
-                : SearchUrl + Uri.EscapeDataString(input);
-
+        string url = ResolveInput(input);
         tab.Url = url;
         tab.Web.CoreWebView2.Navigate(url);
     }
@@ -220,7 +248,7 @@ public class MainForm : Form
         if (tab.Web is not null) return;
 
         // Environment dibuat sekali & dipakai bersama → browser proses juga satu (hemat RAM)
-        _env ??= await CoreWebView2Environment.CreateAsync(userDataFolder: _userDataDir);
+        _env ??= await CreateEnvAsync();
 
         var w = new WebView2
         {
@@ -232,6 +260,10 @@ public class MainForm : Form
         _host.Controls.Add(w);
         tab.Web = w;
         await w.EnsureCoreWebView2Async(_env);
+
+        // S1: UA per-profil (override engine, diterapkan pada tiap WebView2 baru)
+        if (!string.IsNullOrEmpty(AgentCfg.UserAgent))
+            w.CoreWebView2.Settings.UserAgent = AgentCfg.UserAgent;
 
         w.CoreWebView2.DocumentTitleChanged += (s, _) =>
         {
@@ -397,10 +429,12 @@ public class MainForm : Form
         return result;
     }
 
-    protected override async void OnLoad(EventArgs e)
+    /// <summary>
+    /// Buka tab awal + bukti CDP. Dipanggil dari OnLoad (jendela normal)
+    /// maupun dari McpAppContext (headless — OnLoad tidak pernah fire tanpa Show()).
+    /// </summary>
+    public async Task InitializeAsync()
     {
-        base.OnLoad(e);
-
         try
         {
             if (_initialUrls.Count == 0)
@@ -423,12 +457,20 @@ public class MainForm : Form
                 using var doc = JsonDocument.Parse(json);
                 var product = doc.RootElement.GetProperty("product").GetString();
                 _status.Text = $"CDP OK: {product}";
+                AgentLog.Write("startup", new { headless = Headless, cdp = product });
             }
         }
         catch (Exception ex)
         {
             _status.Text = "Gagal init WebView2: " + ex.Message;
+            AgentLog.Write("startup.failed", ex.Message);
         }
+    }
+
+    protected override async void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        await InitializeAsync();
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)
@@ -436,6 +478,339 @@ public class MainForm : Form
         _ramTimer.Stop();
         _sleepSweep.Stop();
         base.OnFormClosed(e);
+    }
+
+    // ==================== M2: Tools MCP ====================
+    // Satpam ke McpServer: semua eksekusi tiba di UI thread dari sini, dan
+    // SEMUA aksi agent tunduk pada izin domain (AgentCfg) + dicatat AgentLog.
+
+    public async Task<string> McpCallAsync(string tool, JsonElement args)
+    {
+        return tool switch
+        {
+            "flit_list_tabs" => McpListTabs(),
+            "flit_new_tab" => await McpNewTabAsync(args),
+            "flit_close_tab" => McpCloseTool(args),
+            "flit_activate_tab" => McpActivateTool(args),
+            "flit_navigate" => await McpNavigateAsync(args),
+            "flit_get_page_text" => await McpGetPageTextAsync(args),
+            "flit_snapshot" => await McpSnapshotAsync(args),
+            "flit_screenshot" => await McpScreenshotAsync(args),
+            "flit_find" => await McpFindAsync(args),
+            "flit_evaluate_js" => await McpEvaluateAsync(args),
+            "flit_status" => McpStatus(),
+            _ => throw new McpToolError($"Tool tidak dikenal: {tool}"),
+        };
+    }
+
+    private static string? ArgStr(JsonElement a, string name) =>
+        a.ValueKind == JsonValueKind.Object && a.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString() : null;
+
+    private static int ArgInt(JsonElement a, string name, int def) =>
+        a.ValueKind == JsonValueKind.Object && a.TryGetProperty(name, out var v) &&
+        v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var i) ? i : def;
+
+    private static bool ArgBool(JsonElement a, string name, bool def) =>
+        a.ValueKind == JsonValueKind.Object && a.TryGetProperty(name, out var v) &&
+        (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False) ? v.GetBoolean() : def;
+
+    private FlitTab ResolveTab(JsonElement args)
+    {
+        // defensif: _active belum di-set tapi tab sudah ada → pakai tab pertama
+        var def = _active >= 0 ? _active : (_tabs.Count > 0 ? 0 : -1);
+        var idx = ArgInt(args, "tabIndex", def);
+        if (idx < 0 || idx >= _tabs.Count)
+            throw new McpToolError($"tabIndex {idx} tidak ada (0..{_tabs.Count - 1})");
+        return _tabs[idx];
+    }
+
+    /// <summary>Bangunkan tab yang tidur (TrySuspend) sebelum disentuh agent/API.</summary>
+    private void WakeTab(FlitTab tab)
+    {
+        if (!tab.IsSleeping || tab.Web is null) return;
+        try { tab.Web.CoreWebView2?.Resume(); } catch { /* sudah bangun */ }
+        tab.IsSleeping = false;
+        if (!ReferenceEquals(Current, tab) && !tab.IsLoading) tab.BackgroundReadyAt = DateTime.Now;
+        _tabStrip.Invalidate();
+    }
+
+    private async Task<bool> WaitForLoadAsync(FlitTab tab, int timeoutMs = 30000)
+    {
+        var sw = Stopwatch.StartNew();
+        while (tab.IsLoading && sw.ElapsedMilliseconds < timeoutMs)
+            await Task.Delay(100);
+        return !tab.IsLoading;
+    }
+
+    private string McpListTabs()
+    {
+        var tabs = _tabs.Select((t, i) => new
+        {
+            index = i,
+            title = t.Title,
+            url = t.Web?.CoreWebView2?.Source ?? t.Url,
+            isLoading = t.IsLoading,
+            isSleeping = t.IsSleeping,
+            isActive = i == _active,
+        });
+        return JsonSerializer.Serialize(new { tabs });
+    }
+
+    private async Task<string> McpNewTabAsync(JsonElement args)
+    {
+        var url = ArgStr(args, "url");
+        var activate = ArgBool(args, "activate", false);
+        if (url is not null)
+        {
+            var final = ResolveInput(url);
+            if (!AgentCfg.IsDomainAllowed(final))
+            {
+                AgentLog.Write("agent.denied", new { action = "new_tab", url = final });
+                throw new McpToolError($"Domain tidak diizinkan: {new Uri(final).Host}");
+            }
+        }
+        await OpenTabAsync(url is null ? null : ResolveInput(url), activate);
+        var idx = _tabs.Count - 1;
+        if (url is not null) await WaitForLoadAsync(_tabs[idx]);
+        AgentLog.Write("agent.new_tab", new { index = idx, url, activate });
+        return JsonSerializer.Serialize(new { index = idx, activated = activate });
+    }
+
+    private string McpCloseTool(JsonElement args)
+    {
+        var idx = ArgInt(args, "index", -1);
+        if (idx < 0 || idx >= _tabs.Count) throw new McpToolError($"index {idx} tidak ada");
+        CloseTab(idx);
+        AgentLog.Write("agent.close_tab", idx);
+        return JsonSerializer.Serialize(new { closed = idx, tabs = _tabs.Count });
+    }
+
+    private string McpActivateTool(JsonElement args)
+    {
+        var idx = ArgInt(args, "index", -1);
+        if (idx < 0 || idx >= _tabs.Count) throw new McpToolError($"index {idx} tidak ada");
+        ActivateTab(idx);
+        AgentLog.Write("agent.activate_tab", idx);
+        return JsonSerializer.Serialize(new { active = idx });
+    }
+
+    private async Task<string> McpNavigateAsync(JsonElement args)
+    {
+        var tab = ResolveTab(args);
+        var input = ArgStr(args, "url") ?? throw new McpToolError("url wajib diisi");
+        var url = ResolveInput(input);
+        if (!AgentCfg.IsDomainAllowed(url))
+        {
+            AgentLog.Write("agent.denied", new { action = "navigate", url });
+            throw new McpToolError($"Domain tidak diizinkan: {new Uri(url).Host}");
+        }
+        WakeTab(tab);
+        if (tab.Web?.CoreWebView2 is null) throw new McpToolError("Engine tab belum siap");
+        tab.IsLoading = true; // set dulu → WaitForLoadAsync tak kalah rasa dengan NavigationStarting
+        tab.Url = url;
+        tab.Web.CoreWebView2.Navigate(url);
+        var ok = await WaitForLoadAsync(tab);
+        AgentLog.Write("agent.navigate", new { url, loaded = ok });
+        return JsonSerializer.Serialize(new { index = _tabs.IndexOf(tab), url, loaded = ok });
+    }
+
+    private async Task<string> McpGetPageTextAsync(JsonElement args)
+    {
+        var tab = ResolveTab(args);
+        WakeTab(tab);
+        if (tab.Web?.CoreWebView2 is null) throw new McpToolError("Engine tab belum siap");
+        var max = Math.Clamp(ArgInt(args, "maxChars", 200_000), 100, 2_000_000);
+        var raw = await tab.Web.CoreWebView2.ExecuteScriptAsync("document.body ? document.body.innerText : ''");
+        var text = JsonSerializer.Deserialize<string>(raw) ?? "";
+        AgentLog.Write("agent.read_text", new { url = tab.Web.CoreWebView2.Source, chars = text.Length });
+        return JsonSerializer.Serialize(new
+        {
+            index = _tabs.IndexOf(tab),
+            url = tab.Web.CoreWebView2.Source,
+            text = text.Length > max ? text[..max] : text,
+            truncated = text.Length > max,
+        });
+    }
+
+    private static string AxField(JsonElement n, string key)
+    {
+        if (!n.TryGetProperty(key, out var o) || o.ValueKind != JsonValueKind.Object) return "";
+        if (o.TryGetProperty("value", out var v) && v.ValueKind == JsonValueKind.String) return v.GetString() ?? "";
+        return "";
+    }
+
+    private async Task<string> McpSnapshotAsync(JsonElement args)
+    {
+        var tab = ResolveTab(args);
+        WakeTab(tab);
+        if (tab.Web?.CoreWebView2 is null) throw new McpToolError("Engine tab belum siap");
+        var maxNodes = Math.Clamp(ArgInt(args, "maxNodes", 400), 10, 2000);
+
+        var raw = await tab.Web.CoreWebView2.CallDevToolsProtocolMethodAsync("Accessibility.getFullAXTree", "{}");
+        using var doc = JsonDocument.Parse(raw);
+        var nodes = new List<object>(Math.Min(maxNodes, 512));
+        var truncated = false;
+        foreach (var n in doc.RootElement.GetProperty("nodes").EnumerateArray())
+        {
+            if (n.TryGetProperty("ignored", out var ig) && ig.ValueKind == JsonValueKind.True) continue;
+            if (nodes.Count >= maxNodes) { truncated = true; break; }
+            var childIds = n.TryGetProperty("childIds", out var c)
+                ? c.EnumerateArray().Select(x => x.GetInt64()).ToArray()
+                : Array.Empty<long>();
+            nodes.Add(new
+            {
+                id = n.TryGetProperty("nodeId", out var nid) ? nid.GetInt64() : 0L,
+                role = AxField(n, "role"),
+                name = AxField(n, "name"),
+                value = AxField(n, "value"),
+                childIds,
+            });
+        }
+        var url = tab.Web.CoreWebView2.Source ?? tab.Url;
+        AgentLog.Write("agent.snapshot", new { url, nodes = nodes.Count, truncated });
+        return JsonSerializer.Serialize(new
+        {
+            index = _tabs.IndexOf(tab),
+            url,
+            nodes,
+            truncated,
+        });
+    }
+
+    private async Task<string> McpScreenshotAsync(JsonElement args)
+    {
+        var tab = ResolveTab(args);
+        WakeTab(tab);
+        if (tab.Web?.CoreWebView2 is null) throw new McpToolError("Engine tab belum siap");
+
+        var dir = Path.Combine(AgentConfig.ConfigDir, "screenshots");
+        Directory.CreateDirectory(dir);
+        var path = ArgStr(args, "path");
+        if (string.IsNullOrWhiteSpace(path))
+            path = Path.Combine(dir, $"flit-{DateTime.Now:yyyyMMdd-HHmmss}-{_tabs.IndexOf(tab)}.png");
+
+        // WebView2 tersembunyi berhenti mengomposisi → tampilkan sekejap, tangkap, pulihkan.
+        // Di mode headless form induk tak pernah tampil, jadi tidak ada flash di layar.
+        var wasVisible = tab.Web.Visible;
+        tab.Web.Visible = true;
+        await Task.Delay(250);
+
+        // Form tersembunyi bisa membuat compositor tak mengirim frame → beberapa varian
+        // parameter CDP dicoba berurutan, masing-masing dengan batas waktu. Tanpa ini
+        // agent bisa menggantung selamanya menunggu respons.
+        string data = "";
+        foreach (var param in new[]
+                 {
+                     "{\"format\":\"png\",\"fromSurface\":false}",
+                     "{\"format\":\"png\",\"captureBeyondViewport\":true}",
+                     "{\"format\":\"png\"}",
+                 })
+        {
+            var cdpTask = tab.Web.CoreWebView2.CallDevToolsProtocolMethodAsync("Page.captureScreenshot", param);
+            var done = await Task.WhenAny(cdpTask, Task.Delay(TimeSpan.FromSeconds(10)));
+            if (done == cdpTask)
+            {
+                using var doc = JsonDocument.Parse(cdpTask.Result);
+                data = doc.RootElement.GetProperty("data").GetString() ?? "";
+                if (data.Length > 0) break;
+            }
+        }
+        tab.Web.Visible = wasVisible;
+
+        if (data.Length == 0)
+            throw new McpToolError(
+                "Screenshot gagal: engine tidak mengirim frame (host tersembunyi). Gunakan flit_snapshot / flit_get_page_text sebagai gantinya.");
+
+        var bytes = Convert.FromBase64String(data);
+        File.WriteAllBytes(path, bytes);
+        AgentLog.Write("agent.screenshot", new { url = tab.Web.CoreWebView2.Source, path, bytes = bytes.Length });
+        return JsonSerializer.Serialize(new { path, bytes = bytes.Length });
+    }
+
+    // Cari teks (case-insensitive) + sorot kemunculan pertama — dipakai UI find bar (M3) juga
+    private const string FindJs = """
+(function(){
+  var q = %Q%;
+  if(!q) return JSON.stringify({count:0});
+  var count = 0, first = null;
+  var root = document.body || document.documentElement;
+  if(!root) return JSON.stringify({count:0});
+  var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  var n; var qq = q.toLowerCase();
+  while((n = w.nextNode())){
+    var t = n.textContent || ''; var low = t.toLowerCase(); var i = 0;
+    while((i = low.indexOf(qq, i)) !== -1){
+      count++;
+      if(!first){
+        try {
+          var r = document.createRange();
+          r.setStart(n, i); r.setEnd(n, Math.min(i + q.length, t.length));
+          first = r;
+        } catch(e) {}
+      }
+      i += Math.max(q.length, 1);
+    }
+  }
+  if(first){
+    var s = window.getSelection(); s.removeAllRanges(); s.addRange(first);
+  }
+  return JSON.stringify({count: count});
+})()
+""";
+
+    private async Task<string> McpFindAsync(JsonElement args)
+    {
+        var tab = ResolveTab(args);
+        WakeTab(tab);
+        if (tab.Web?.CoreWebView2 is null) throw new McpToolError("Engine tab belum siap");
+        var query = ArgStr(args, "query") ?? "";
+        var js = FindJs.Replace("%Q%", JsonSerializer.Serialize(query));
+        var raw = await tab.Web.CoreWebView2.ExecuteScriptAsync(js);
+        var json = JsonSerializer.Deserialize<string>(raw) ?? "{\"count\":0}";
+        AgentLog.Write("agent.find", new { url = tab.Web.CoreWebView2.Source, query });
+        return json;
+    }
+
+    private async Task<string> McpEvaluateAsync(JsonElement args)
+    {
+        if (!AgentCfg.AllowEvaluate)
+            throw new McpToolError(
+                "flit_evaluate_js nonaktif. Nyalakan via agent.allowEvaluate=true di config.json atau --allow-evaluate.");
+        var tab = ResolveTab(args);
+        WakeTab(tab);
+        if (tab.Web?.CoreWebView2 is null) throw new McpToolError("Engine tab belum siap");
+        var url = tab.Web.CoreWebView2.Source ?? "";
+        if (url.Length > 0 && !AgentCfg.IsDomainAllowed(url))
+        {
+            AgentLog.Write("agent.denied", new { action = "evaluate", url });
+            throw new McpToolError($"Domain tidak diizinkan: {new Uri(url).Host}");
+        }
+        var script = ArgStr(args, "script") ?? throw new McpToolError("script wajib diisi");
+        var raw = await tab.Web.CoreWebView2.ExecuteScriptAsync(script);
+        AgentLog.Write("agent.evaluate", new { url, script });
+        return "{\"result\":" + raw + "}"; // raw sudah JSON-encoded oleh WebView2
+    }
+
+    private string McpStatus()
+    {
+        return JsonSerializer.Serialize(new
+        {
+            name = "Flit",
+            version = "0.2.0",
+            milestone = "M2",
+            tabs = _tabs.Count,
+            active = _active,
+            headless = Headless,
+            agent = new
+            {
+                domainMode = AgentCfg.AllowedDomains.Count == 0 ? "all" : "allowlist",
+                allowedDomains = AgentCfg.AllowedDomains,
+                allowEvaluate = AgentCfg.AllowEvaluate,
+                logDir = AgentLog.LogDir,
+            },
+            ram = _ram.Text,
+        });
     }
 
     // Title bar gelap di Windows 10/11

@@ -77,21 +77,21 @@ RAM idle ≤150 MB • 20 tab latar tidur ≤ +400 MB • startup <1,5 s • sna
 
 | Fase | Isi | Stealth |
 |---|---|---|
-| **M0** | Prototype 1-tab + CDP + benchmark RAM vs Chrome/Mercury (Go/No-Go) | — |
-| **M1** | MVP: multi-tab + suspend/discard + MCP tools inti + find-in-page | S1 dasar (webdriver flag off) |
-| **M2** | Keamanan agent: izin per-domain, activity log, konfirmasi sensitif, headless mode | S1 lengkap (identitas per-profil + proxy) |
-| **M3** | Manusia lengkap: bookmark/sandi/ekstensi/history/save + **adblock penuh** | — |
-| **M4** | Stealth S2 (injeksi koheren) + backend Lightpanda opsional + sidecar captcha + eskalasi adblock-rust jika perlu | S2–S3 |
+| **M0** ✅ 2026-11-11 | Prototype 1-tab + CDP + benchmark RAM vs Chrome/Mercury (Go/No-Go) — [M0-RESULT.md] | — |
+| **M1** ✅ 2026-11-11 | MVP: multi-tab + suspend otomatis — [M1-RESULT.md] (find-in-page pindah ke M3; MCP tools dikerjakan di M2) | S1 dasar |
+| **M2** ✅ 2026-11-11 | MCP server headless (11 tools) + izin per-domain + activity log + headless mode — [M2-RESULT.md] (konfirmasi aksi sensitif menyusul di M3) | S1 dasar terverifikasi (webdriver=false); identitas per-profil + proxy → M4 |
+| **M3** ▶ | Manusia lengkap: bookmark/history/find-UI/save/download + **adblock bertahap** + konfirmasi aksi sensitif | — |
+| **M4** ⏳ | Stealth S2 (injeksi koheren) + profil per-identitas + backend Lightpanda opsional + sidecar captcha + eskalasi adblock-rust jika perlu | S2–S3 |
 
 ## 8. Keputusan terkunci vs terbuka
 
 **Terkunci:** engine WebView2 • agent = CDP+MCP a11y-first • adblock = engine sendiri bertahap • stealth = opt-in per-profil di level shell/injeksi/driver (fork Gecko untuk "edisi stealth" **diizinkan pemilik** sebagai eskalasi masa depan dengan kredit + lisensi) • captcha = sidecar terpisah • tanpa sync/telemetri/chatbot bawaan • nama produk = **Flit / Flit Browser** (terkunci 2026-11-10) • lisensi proyek = **MPL-2.0** (terkunci 2026-11-11; kriteria pemilik: aman dari tuntutan hukum) • stack shell = **C# .NET 10 + WinForms** (terkunci 2026-11-11; naik dari .NET 8 karena dukungan .NET 8 berakhir Nov 2026, .NET 10 LTS s/d Nov 2028 + dark mode built-in).
 
-**Terbuka:** [ ] verifikasi mekanik stealth S1/headless (riset dalam antrian).
+**Terbuka:** [x] ~~verifikasi mekanik stealth S1/headless~~ — **terverifikasi empiris 2026-11-11** (M2): `navigator.webdriver=false` via AutomationControlled; mode `--mcp` headless (jendela tak tampil, WebView2 jalan penuh, exit bersih) — bukti di [M2-RESULT.md]. [ ] identitas per-profil + proxy (S1 penuh, M4).
 
 ## 9. Risiko terbesar (peringkat)
 
 1. **Performa handler blocking di UI thread** → O(1) sejak baris pertama (ADBLOCK-DESIGN.md).
-2. **Mode headless WebView2** — belum terverifikasi resmi; fallback: jendela tersembunyi/minimized. (Riset dalam antrian.)
+2. ~~**Mode headless WebView2**~~ — **TERPECAHKAN 2026-11-11**: jendela tersembunyi (ApplicationContext, handle dipaksa tanpa Show()) terbukti jalan penuh termasuk CDP/screenshot (varian `fromSurface:false`).
 3. **Over-promise stealth** → jaga framing §4; deteksi adalah perlombaan senjata, IP menentukan.
 4. **Ekor panjang fitur harian** (M3) → jaga disiplin §7 CONCEPT.md (masuk/dibuang/ditunda).
