@@ -20,6 +20,9 @@ public class AgentConfig
     /// <summary>S1: bahasa engine (mis. "id-ID"). Kosong = default OS.</summary>
     public string Language { get; set; } = "";
 
+    /// <summary>M3: adblock bawaan (network + cosmetic). Default NYALA.</summary>
+    public bool AdblockEnabled { get; set; } = true;
+
     public static string ConfigDir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Flit");
 

@@ -18,7 +18,7 @@ public class McpToolError : Exception
 /// </summary>
 public class McpServer
 {
-    private const string ServerVersion = "0.2.0";
+    private const string ServerVersion = "0.3.0";
     private static readonly string[] KnownProtocolVersions = { "2024-11-05", "2025-03-26", "2025-06-18" };
 
     private readonly MainForm _form;

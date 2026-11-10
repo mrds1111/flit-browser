@@ -4,7 +4,7 @@
 
 Browser Windows ringan untuk manusia **dan** AI agent — shell C# .NET 10 + WinForms di atas WebView2 (Chromium Evergreen).
 
-**Status: M2 — MCP server (agent headless) + izin domain + stealth S1** (bukti uji: [M2-RESULT.md](M2-RESULT.md), benchmark: [M1-RESULT.md](M1-RESULT.md))
+**Status: M3 — adblock (EasyList/EasyPrivacy/ABPindo) + bookmark/riwayat/find/simpan/unduh** (bukti uji: [M3-RESULT.md](M3-RESULT.md), agent: [M2-RESULT.md](M2-RESULT.md), benchmark: [M1-RESULT.md](M1-RESULT.md))
 
 ## Untuk AI agent (MCP)
 
@@ -23,7 +23,7 @@ claude mcp add flit -- C:\path\ke\Flit.exe --mcp
 | [BROWSERS.md](BROWSERS.md) | Katalog referensi 21 browser |
 | [REFERENCES.md](REFERENCES.md) | Referensi & keputusan lolos/tolak |
 | [NOTICES.md](NOTICES.md) | Kredit & kebijakan lisensi pihak ketiga |
-| [M0-RESULT.md](M0-RESULT.md) / [M1-RESULT.md](M1-RESULT.md) / [M2-RESULT.md](M2-RESULT.md) | Hasil & bukti uji per milestone |
+| [M0-RESULT.md](M0-RESULT.md) / [M1-RESULT.md](M1-RESULT.md) / [M2-RESULT.md](M2-RESULT.md) / [M3-RESULT.md](M3-RESULT.md) | Hasil & bukti uji per milestone |
 
 ## Lisensi
 

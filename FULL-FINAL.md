@@ -80,8 +80,8 @@ RAM idle ≤150 MB • 20 tab latar tidur ≤ +400 MB • startup <1,5 s • sna
 | **M0** ✅ 2026-11-11 | Prototype 1-tab + CDP + benchmark RAM vs Chrome/Mercury (Go/No-Go) — [M0-RESULT.md] | — |
 | **M1** ✅ 2026-11-11 | MVP: multi-tab + suspend otomatis — [M1-RESULT.md] (find-in-page pindah ke M3; MCP tools dikerjakan di M2) | S1 dasar |
 | **M2** ✅ 2026-11-11 | MCP server headless (11 tools) + izin per-domain + activity log + headless mode — [M2-RESULT.md] (konfirmasi aksi sensitif menyusul di M3) | S1 dasar terverifikasi (webdriver=false); identitas per-profil + proxy → M4 |
-| **M3** ▶ | Manusia lengkap: bookmark/history/find-UI/save/download + **adblock bertahap** + konfirmasi aksi sensitif | — |
-| **M4** ⏳ | Stealth S2 (injeksi koheren) + profil per-identitas + backend Lightpanda opsional + sidecar captcha + eskalasi adblock-rust jika perlu | S2–S3 |
+| **M3** ✅ 2026-11-11 | Manusia lengkap: bookmark/history/find-UI/save/download + **adblock** (101.545 aturan network + cosmetic, bukti [M3-RESULT.md]) | — |
+| **M4** ⏳ | Stealth S2 (injeksi koheren) + profil per-identitas + backend Lightpanda opsional + sidecar captcha + eskalasi adblock-rust jika perlu + **konfirmasi aksi sensitif** (digeser dari M3) | S2–S3 |
 
 ## 8. Keputusan terkunci vs terbuka
 

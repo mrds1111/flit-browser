@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Management;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using Flit.Adblock;
 using Flit.Mcp;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -30,6 +31,13 @@ public class MainForm : Form
     private readonly string _userDataDir;
     private CoreWebView2Environment? _env;
     private int _active = -1;
+
+    // ==== M3: find bar + bookmark star ====
+    private readonly Panel _findBar = new() { Dock = DockStyle.Bottom, Height = 36, Visible = false, BackColor = Color.FromArgb(43, 43, 43), Padding = new Padding(6, 5, 6, 5) };
+    private readonly TextBox _findBox = new() { Width = 240, BorderStyle = BorderStyle.FixedSingle, BackColor = Color.FromArgb(60, 60, 64), ForeColor = Color.FromArgb(232, 234, 237) };
+    private readonly Label _findCount = new() { Width = 90, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.FromArgb(154, 160, 166), Text = "" };
+    private Button? _star;
+    private string _lastFindQuery = "";
 
     // ==== M2: mode agent ====
     public AgentConfig AgentCfg { get; }
@@ -116,6 +124,11 @@ public class MainForm : Form
         nav.Controls.Add(NavButton("⟳", () => { if (Current?.Web?.CoreWebView2 is not null) Current!.Web!.Reload(); }), 2, 0);
         nav.Controls.Add(_omnibox, 3, 0);
         nav.Controls.Add(NavButton("Go", Navigate), 4, 0);
+        _star = NavButton("☆", () => _ = ToggleBookmarkAsync());
+        _star.Width = 30;
+        nav.Controls.Add(_star, 5, 0);
+        nav.ColumnCount = 6;
+        nav.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         navRow.Controls.Add(nav);
 
         _tabStrip = new TabStrip(_tabs);
@@ -130,7 +143,11 @@ public class MainForm : Form
         // Urutan penambahan menentukan docking: Fill dulu, lalu Top, lalu Bottom
         Controls.Add(_host);
         Controls.Add(chrome);
+        Controls.Add(BuildMenu(chromeBg, fg, dim));
+        Controls.Add(_findBar);
         Controls.Add(bottom);
+
+        BuildFindBar();
 
         _omnibox.KeyDown += (s, e) =>
         {
@@ -146,6 +163,9 @@ public class MainForm : Form
         _sleepSweep = new System.Windows.Forms.Timer { Interval = 5000 };
         _sleepSweep.Tick += (s, e) => SweepSleep();
         _sleepSweep.Start();
+
+        // M3: adblock bawaan (list unduh/cache di background; handler pasang per-webview)
+        AdblockStore.Initialize(AgentCfg, OnAdblockEngineReady);
     }
 
     private async Task<CoreWebView2Environment> CreateEnvAsync()
@@ -187,6 +207,11 @@ public class MainForm : Form
             case Keys.Control | Keys.T: _ = OpenTabAsync(null); return true;
             case Keys.Control | Keys.W: CloseTab(_active); return true;
             case Keys.Control | Keys.L: _omnibox.Focus(); _omnibox.SelectAll(); return true;
+            case Keys.Control | Keys.F: ShowFindBar(); return true;
+            case Keys.Control | Keys.D: _ = ToggleBookmarkAsync(); return true;
+            case Keys.Control | Keys.H: ShowHistory(); return true;
+            case Keys.Control | Keys.S: _ = SavePageAsync(mhtml: true); return true;
+            case Keys.Escape when _findBar.Visible: HideFindBar(); return true;
         }
         return base.ProcessCmdKey(ref msg, keyData);
     }
@@ -286,7 +311,79 @@ public class MainForm : Form
                 _status.Text = "Selesai: " + w.CoreWebView2.Source;
                 SyncOmnibox();
             }
+            // M3: catat history (hanya navigasi tingkat atas yang tiba di sini)
+            var src = w.CoreWebView2.Source;
+            if (src is { Length: > 0 } && !src.StartsWith("about:", StringComparison.Ordinal))
+                HistoryStore.Append(src, tab.Title);
             _tabStrip.Invalidate();
+        };
+
+        // M3: unduhan → folder Downloads\Flit, progress di status bar
+        w.CoreWebView2.DownloadStarting += (s, e) =>
+        {
+            try
+            {
+                e.Handled = true;
+                var op = e.DownloadOperation;
+                var dir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "Flit");
+                Directory.CreateDirectory(dir);
+                var name = "download-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                try
+                {
+                    var fromUrl = new Uri(op.Uri).AbsolutePath.Split('/').LastOrDefault(x => x.Length > 0);
+                    if (!string.IsNullOrEmpty(fromUrl)) name = Uri.UnescapeDataString(fromUrl);
+                }
+                catch { }
+                e.ResultFilePath = UniquePath(Path.Combine(dir, SanitizeFileName(name)));
+                op.StateChanged += (_, _) =>
+                {
+                    if (op.State == CoreWebView2DownloadState.Completed)
+                        BeginInvoke(new Action(() => _status.Text = "Unduhan selesai: " + op.ResultFilePath));
+                    else if (op.State == CoreWebView2DownloadState.Interrupted)
+                        BeginInvoke(new Action(() => _status.Text = "Unduhan terputus: " + op.ResultFilePath));
+                };
+                AgentLog.Write("download", new { url = op.Uri, path = op.ResultFilePath });
+                _status.Text = "Mengunduh: " + op.ResultFilePath;
+            }
+            catch { /* unduhan gagal atur → biarkan default behavior */ }
+        };
+
+        // M3: adblock lapisan 1 — network blocking (handler HARUS cepat: O(1) per domain)
+        w.CoreWebView2.WebResourceRequested += (s, e) =>
+        {
+            var engine = AdblockStore.Current;
+            if (engine is null) return;
+            try
+            {
+                string? refHost = null;
+                if (e.Request.Headers.Contains("Referer"))
+                {
+                    var r = e.Request.Headers.GetHeader("Referer");
+                    if (Uri.TryCreate(r, UriKind.Absolute, out var ru))
+                        refHost = ru.Host;
+                }
+                if (!engine.ShouldBlock(e.Request.Uri, MapResourceType(e.ResourceContext), refHost))
+                    return;
+                AdblockStore.BlockedCount++;
+                e.Response = _env!.CreateWebResourceResponse(null, 200, "OK", "");
+            }
+            catch { /* jangan pernah ganggu load halaman */ }
+        };
+        // Semua konteks resource (service worker tak tercakup API — celah terdokumentasi)
+        w.CoreWebView2.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
+
+        // M3: adblock lapisan 2 — cosmetic (## element hiding). AddScriptToExecuteOnDocumentCreatedAsync
+        // terbukti gagal senyap utk script besar di uji M3 → pakai DOMContentLoaded + ExecuteScriptAsync,
+        // mekanisme yang sama dengan MCP evaluate (terbukti jalan headless).
+        w.CoreWebView2.DOMContentLoaded += (s, e) =>
+        {
+            try
+            {
+                foreach (var js in AdblockStore.CosmeticScriptsCache)
+                    _ = w.CoreWebView2.ExecuteScriptAsync(js);
+            }
+            catch (Exception ex) { AgentLog.Write("adblock.cosmetic_fail", ex.Message); }
         };
 
         tab.IsLoading = true;
@@ -326,6 +423,14 @@ public class MainForm : Form
         var tab = Current;
         if (tab is null) return;
         _omnibox.Text = tab.Web?.CoreWebView2?.Source is { Length: > 0 } src ? src : tab.Url;
+        UpdateStar();
+    }
+
+    private void UpdateStar()
+    {
+        if (_star is null) return;
+        var url = Current?.Web?.CoreWebView2?.Source;
+        _star.Text = url is { Length: > 10 } && BookmarksStore.IsBookmarked(url) ? "★" : "☆";
     }
 
     private void CloseTab(int idx)
@@ -404,7 +509,8 @@ public class MainForm : Form
             }
 
             double mbWs = ws / 1024.0 / 1024.0, mbPm = pm / 1024.0 / 1024.0;
-            _ram.Text = $"RAM: {mbPm:F0} MB private • {mbWs:F0} MB WS";
+            _ram.Text = $"RAM: {mbPm:F0} MB private • {mbWs:F0} MB WS" +
+                        (AdblockStore.Current is not null ? $" • blokir {AdblockStore.BlockedCount}" : "");
         }
         catch { /* ticker tidak boleh bikin crash */ }
     }
@@ -478,6 +584,307 @@ public class MainForm : Form
         _ramTimer.Stop();
         _sleepSweep.Stop();
         base.OnFormClosed(e);
+    }
+
+    // ==================== M3: fitur harian ====================
+
+    private MenuStrip BuildMenu(Color chromeBg, Color fg, Color dim)
+    {
+        var menu = new MenuStrip
+        {
+            BackColor = chromeBg,
+            ForeColor = fg,
+            Renderer = new DarkMenuRenderer(),
+            Padding = new Padding(4, 2, 4, 2),
+        };
+
+        var mi = new ToolStripMenuItem("Menu") { ForeColor = fg };
+        mi.DropDownItems.Add(Item("Tab baru    Ctrl+T", (s, e) => _ = OpenTabAsync(null)));
+        mi.DropDownItems.Add(Item("Cari di halaman    Ctrl+F", (s, e) => ShowFindBar()));
+        mi.DropDownItems.Add(Item("Riwayat    Ctrl+H", (s, e) => ShowHistory()));
+        mi.DropDownItems.Add(new ToolStripSeparator());
+        mi.DropDownItems.Add(Item("Simpan halaman (MHTML)    Ctrl+S", (s, e) => _ = SavePageAsync(true)));
+        mi.DropDownItems.Add(Item("Simpan PDF", (s, e) => _ = SavePageAsync(false)));
+        mi.DropDownItems.Add(new ToolStripSeparator());
+        ToolStripMenuItem adItem = null!;
+        adItem = Item("Adblock: " + (AdblockStore.Current is null ? "NONAKTIF" : "aktif"), (s, e) =>
+        {
+            var turningOn = AdblockStore.Current is null;
+            AdblockStore.SetEnabled(turningOn, AgentCfg, OnAdblockEngineReady);
+            adItem.Text = "Adblock: " + (turningOn ? "aktif" : "NONAKTIF");
+            _status.Text = turningOn ? "Adblock dinyalakan (memuat daftar...)" : "Adblock dimatikan";
+        });
+        mi.DropDownItems.Add(adItem);
+        mi.DropDownItems.Add(Item("Tentang Flit", (s, e) =>
+            MessageBox.Show("Flit Browser 0.3 (M3)\nOne browser, both of us.\n\nWebView2 (Chromium Evergreen) • MPL-2.0\nAdblock: EasyList/EasyPrivacy/ABPindo (CC BY-SA 3.0)",
+                "Tentang Flit", MessageBoxButtons.OK, MessageBoxIcon.Information)));
+
+        var bm = new ToolStripMenuItem("Bookmark") { ForeColor = fg };
+        bm.DropDownOpening += (s, e) => RebuildBookmarkMenu(bm);
+
+        menu.Items.Add(mi);
+        menu.Items.Add(bm);
+        return menu;
+    }
+
+    private static ToolStripMenuItem Item(string text, EventHandler onClick) =>
+        new(text) { ForeColor = Color.FromArgb(232, 234, 237) };
+
+    private void RebuildBookmarkMenu(ToolStripDropDownItem bm)
+    {
+        bm.DropDownItems.Clear();
+        var cur = Current?.Web?.CoreWebView2?.Source;
+        if (cur is { Length: > 10 } && !cur.StartsWith("about:", StringComparison.Ordinal))
+        {
+            var marked = BookmarksStore.IsBookmarked(cur);
+            bm.DropDownItems.Add(Item(marked ? "★ Hapus bookmark halaman ini" : "☆ Bookmark halaman ini    Ctrl+D",
+                (s, e) => _ = ToggleBookmarkAsync()));
+        }
+        var all = BookmarksStore.All();
+        if (all.Count > 0) bm.DropDownItems.Add(new ToolStripSeparator());
+        foreach (var b in all.AsEnumerable().Reverse())
+        {
+            var url = b.Url;
+            var title = b.Title.Length > 60 ? b.Title[..60] + "…" : b.Title;
+            var it = Item("•  " + title, (s, e) => _ = OpenTabAsync(url));
+            it.ToolTipText = url;
+            bm.DropDownItems.Add(it);
+        }
+        if (all.Count == 0)
+            bm.DropDownItems.Add(Item("(kosong — tekan Ctrl+D untuk mem-bookmark)", (s, e) => { }));
+    }
+
+    // ---- find in page ----
+
+    private void BuildFindBar()
+    {
+        var prev = NavButton("‹", () => _ = RunFindAsync(false, true));
+        var next = NavButton("›", () => _ = RunFindAsync(false, false));
+        var close = NavButton("✕", HideFindBar);
+        _findBox.KeyDown += (s, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                _ = RunFindAsync(_findBox.Text != _lastFindQuery, e.Shift);
+            }
+            else if (e.KeyCode == Keys.Escape)
+            {
+                HideFindBar();
+            }
+        };
+        var flow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            BackColor = _findBar.BackColor,
+            WrapContents = false,
+        };
+        flow.Controls.Add(_findBox);
+        flow.Controls.Add(_findCount);
+        flow.Controls.Add(prev);
+        flow.Controls.Add(next);
+        flow.Controls.Add(close);
+        _findBar.Controls.Add(flow);
+    }
+
+    private void ShowFindBar()
+    {
+        _findBar.Visible = true;
+        _findBox.Focus();
+        _findBox.SelectAll();
+    }
+
+    private void HideFindBar()
+    {
+        _findBar.Visible = false;
+        _lastFindQuery = "";
+        if (Current?.Web?.CoreWebView2 is { } core)
+            _ = core.ExecuteScriptAsync("try{window.getSelection().removeAllRanges()}catch(e){}");
+        _omnibox.Focus();
+    }
+
+    /// <summary>fresh = hitung jumlah + sorot pertama; else maju/mundur ke kemunculan berikutnya.</summary>
+    private async Task RunFindAsync(bool fresh, bool back)
+    {
+        try
+        {
+            var core = Current?.Web?.CoreWebView2;
+            if (core is null || !_findBar.Visible) return;
+            var q = _findBox.Text;
+            if (q.Length == 0) { _findCount.Text = ""; return; }
+
+            if (fresh)
+            {
+                _lastFindQuery = q;
+                var js = FindJs.Replace("%Q%", JsonSerializer.Serialize(q));
+                var raw = await core.ExecuteScriptAsync(js);
+                var json = JsonSerializer.Deserialize<string>(raw) ?? "{}";
+                using var doc = JsonDocument.Parse(json);
+                var count = doc.RootElement.TryGetProperty("count", out var c) ? c.GetInt32() : 0;
+                _findCount.Text = count == 0 ? "tidak ada" : count + " hasil";
+            }
+            else
+            {
+                var js = FindNextJs.Replace("%Q%", JsonSerializer.Serialize(q))
+                                   .Replace("%BACK%", back ? "true" : "false");
+                var raw = await core.ExecuteScriptAsync(js);
+                if (raw == "false") _findCount.Text = "tepi halaman";
+            }
+        }
+        catch { /* find tidak boleh crash */ }
+    }
+
+    // ---- bookmark / history / simpan ----
+
+    private Task ToggleBookmarkAsync()
+    {
+        try
+        {
+            var core = Current?.Web?.CoreWebView2;
+            if (core is null) return Task.CompletedTask;
+            var url = core.Source;
+            if (string.IsNullOrEmpty(url) || url.StartsWith("about:", StringComparison.Ordinal))
+                return Task.CompletedTask;
+            var added = BookmarksStore.Toggle(url, Current!.Title);
+            _status.Text = added ? "★ Dibookmark: " + url : "Bookmark dihapus";
+            UpdateStar();
+            AgentLog.Write("bookmark", new { url, added });
+        }
+        catch { }
+        return Task.CompletedTask;
+    }
+
+    private void ShowHistory()
+    {
+        new HistoryForm(url => _ = OpenTabAsync(url)).Show(this);
+    }
+
+    private async Task SavePageAsync(bool mhtml)
+    {
+        var core = Current?.Web?.CoreWebView2;
+        if (core is null) return;
+        try
+        {
+            var title = Current?.Title ?? "halaman";
+            if (mhtml)
+            {
+                _status.Text = "Menyimpan MHTML...";
+                var raw = await core.CallDevToolsProtocolMethodAsync("Page.captureSnapshot", "{\"format\":\"mhtml\"}");
+                using var doc = JsonDocument.Parse(raw);
+                var data = doc.RootElement.GetProperty("data").GetString() ?? "";
+                var path = SavePathFor(title, ".mhtml");
+                await File.WriteAllTextAsync(path, data);
+                _status.Text = "Tersimpan: " + path;
+                AgentLog.Write("save.mhtml", new { url = core.Source, path });
+            }
+            else
+            {
+                _status.Text = "Mencetak PDF...";
+                var raw = await core.CallDevToolsProtocolMethodAsync("Page.printToPDF", "{}");
+                using var doc = JsonDocument.Parse(raw);
+                var b64 = doc.RootElement.GetProperty("data").GetString() ?? "";
+                var path = SavePathFor(title, ".pdf");
+                await File.WriteAllBytesAsync(path, Convert.FromBase64String(b64));
+                _status.Text = "Tersimpan: " + path;
+                AgentLog.Write("save.pdf", new { url = core.Source, path });
+            }
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "Gagal simpan: " + ex.Message;
+        }
+    }
+
+    private static string SavePathFor(string title, string ext)
+    {
+        var dir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "Flit");
+        Directory.CreateDirectory(dir);
+        var baseName = SanitizeFileName(string.IsNullOrWhiteSpace(title) ? "halaman" : title);
+        return UniquePath(Path.Combine(dir, baseName + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ext));
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        var bad = Path.GetInvalidFileNameChars();
+        var sb = new System.Text.StringBuilder(name.Length);
+        foreach (var ch in name)
+            sb.Append(Array.IndexOf(bad, ch) >= 0 ? '_' : ch);
+        var s = sb.ToString().Trim();
+        if (s.Length > 120) s = s[..120];
+        return s.Length == 0 ? "file" : s;
+    }
+
+    private static string UniquePath(string path)
+    {
+        if (!File.Exists(path)) return path;
+        var dir = Path.GetDirectoryName(path)!;
+        var name = Path.GetFileNameWithoutExtension(path);
+        var ext = Path.GetExtension(path);
+        for (int i = 1; i < 1000; i++)
+        {
+            var cand = Path.Combine(dir, $"{name} ({i}){ext}");
+            if (!File.Exists(cand)) return cand;
+        }
+        return path;
+    }
+
+    // ---- adblock support ----
+
+    /// <summary>Engine daftar siap (belakangan, background) → pasang kosmetik ke tab yang sudah ada.</summary>
+    private void OnAdblockEngineReady(FilterEngine engine)
+    {
+        if (IsDisposed) return;
+        BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                foreach (var t in _tabs)
+                {
+                    if (t.Web?.CoreWebView2 is not { } c) continue;
+                    foreach (var js in AdblockStore.CosmeticScriptsCache)
+                        _ = c.ExecuteScriptAsync(js); // dokumen saat ini; dokumen berikutnya lewat DOMContentLoaded
+                }
+                _status.Text = $"Adblock aktif: {engine.NetRules} aturan network • {engine.CosmeticRules} cosmetic";
+            }
+            catch { }
+        }));
+    }
+
+    private static string MapResourceType(CoreWebView2WebResourceContext ctx) => ctx switch
+    {
+        CoreWebView2WebResourceContext.Script => "script",
+        CoreWebView2WebResourceContext.Image => "image",
+        CoreWebView2WebResourceContext.Stylesheet => "stylesheet",
+        CoreWebView2WebResourceContext.Media => "media",
+        CoreWebView2WebResourceContext.Font => "font",
+        CoreWebView2WebResourceContext.XmlHttpRequest => "xmlhttprequest",
+        CoreWebView2WebResourceContext.Fetch => "xmlhttprequest",
+        CoreWebView2WebResourceContext.Ping => "ping",
+        CoreWebView2WebResourceContext.Websocket => "websocket",
+        CoreWebView2WebResourceContext.Document => "document",
+        _ => "other",
+    };
+
+    // Renderer gelap untuk MenuStrip — tanpa panel putih
+    private sealed class DarkMenuRenderer : ToolStripProfessionalRenderer
+    {
+        public DarkMenuRenderer() : base(new DarkMenuColors()) { }
+    }
+
+    private sealed class DarkMenuColors : ProfessionalColorTable
+    {
+        public override Color MenuItemSelected => Color.FromArgb(60, 60, 64);
+        public override Color MenuItemBorder => Color.FromArgb(60, 60, 64);
+        public override Color MenuItemSelectedGradientBegin => Color.FromArgb(60, 60, 64);
+        public override Color MenuItemSelectedGradientEnd => Color.FromArgb(60, 60, 64);
+        public override Color ToolStripDropDownBackground => Color.FromArgb(43, 43, 43);
+        public override Color ImageMarginGradientBegin => Color.FromArgb(43, 43, 43);
+        public override Color ImageMarginGradientMiddle => Color.FromArgb(43, 43, 43);
+        public override Color ImageMarginGradientEnd => Color.FromArgb(43, 43, 43);
+        public override Color SeparatorDark => Color.FromArgb(70, 70, 74);
+        public override Color SeparatorLight => Color.FromArgb(70, 70, 74);
     }
 
     // ==================== M2: Tools MCP ====================
@@ -759,6 +1166,9 @@ public class MainForm : Form
 })()
 """;
 
+    // Lanjut/mundur dari sorotan aktif (dipakai find bar M3)
+    private const string FindNextJs = "window.find(%Q%, false, %BACK%, true, false, false, false)";
+
     private async Task<string> McpFindAsync(JsonElement args)
     {
         var tab = ResolveTab(args);
@@ -797,8 +1207,8 @@ public class MainForm : Form
         return JsonSerializer.Serialize(new
         {
             name = "Flit",
-            version = "0.2.0",
-            milestone = "M2",
+            version = "0.3.0",
+            milestone = "M3",
             tabs = _tabs.Count,
             active = _active,
             headless = Headless,

@@ -18,12 +18,18 @@
 
 **Aturan kunci:** komponen **GPL menular** ke keseluruhan karya. Jangan bundel kode GPL (mis. uBlock Origin) ke inti proyek — keputusan terkunci di [FULL-FINAL.md](FULL-FINAL.md).
 
-## 2. Template THIRD-PARTY NOTICES (diisi mulai M0 saat dependensi nyata muncul)
+## 2. THIRD-PARTY NOTICES (komponen yang benar-benar dipakai — M3)
+
+Flit tidak membundel file daftar filter di repositori; daftar diunduh saat runtime dari sumber resminya dan di-cache lokal. Penggunaan datanya tetap mengikuti jalur **CC BY-SA 3.0** (bukan jalur GPL) sesuai keputusan terkunci:
 
 | Komponen | Sumber | Lisensi | Perubahan kami | Kredit |
 |---|---|---|---|---|
-| *(contoh)* EasyList | easylist.to | CC BY-SA 3.0 (jalur CC) | tidak dimodifikasi | The EasyList authors |
-| *(contoh)* ABPindo | github.com/ABPindo/indonesianadblockrules | CC BY-SA 3.0 (jalur CC) | tidak dimodifikasi | ABPindo |
+| EasyList | https://easylist.to/easylist/easylist.txt | CC BY-SA 3.0 | tidak dimodifikasi (di-parse subset aturan) | The EasyList authors |
+| EasyPrivacy | https://easylist.to/easylist/easyprivacy.txt | CC BY-SA 3.0 | tidak dimodifikasi (di-parse subset aturan) | The EasyList authors |
+| ABPindo | https://github.com/ABPindo/indonesianadblockrules | CC BY-SA 3.0 | tidak dimodifikasi (di-parse subset aturan) | ABPindo |
+| Microsoft WebView2 SDK | nuget.org (Microsoft.Web.WebView2) | Ketentuan lisensi Microsoft (redistributable) | tidak dimodifikasi | Microsoft |
+
+Kredit daftar filter juga ditampilkan di menu **Menu → Tentang**.
 
 Catatan: referensi di [REFERENCES.md](REFERENCES.md) yang hanya *dipelajari* (bukan kode/aset yang diikutkan) **tidak** mewajibkan entri di sini — entri wajib hanya untuk kode/aset yang benar-benar dibundel atau diturunkan.
 
