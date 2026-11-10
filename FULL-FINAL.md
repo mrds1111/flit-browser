@@ -82,6 +82,7 @@ RAM idle ≤150 MB • 20 tab latar tidur ≤ +400 MB • startup <1,5 s • sna
 | **M2** ✅ 2026-11-11 | MCP server headless (11 tools) + izin per-domain + activity log + headless mode — [M2-RESULT.md] (konfirmasi aksi sensitif menyusul di M3) | S1 dasar terverifikasi (webdriver=false); identitas per-profil + proxy → M4 |
 | **M3** ✅ 2026-11-11 | Manusia lengkap: bookmark/history/find-UI/save/download + **adblock** (101.545 aturan network + cosmetic, bukti [M3-RESULT.md]) | — |
 | **M4** ✅ 2026-11-11 | Stealth S2 (injeksi koheren, bukti [M4-RESULT.md]) + profil per-identitas + proxy + gerbang confirm + omnibox skema. Backend opsional (Lightpanda/captcha/adblock-rust) = **keputusan terdokumentasi: tidak dibangun v1.0** (alasan di M4-RESULT) | S2–S3 |
+| **M5** ✅ 2026-11-11 | **Deep-discard tier-2**: tab latar tidur >300 dtk → WebView2 dibuang (renderer lenyap dari Task Manager), disentuh = muat ulang — bukti di [M5-RESULT.md] | — |
 
 ## 8. Keputusan terkunci vs terbuka
 

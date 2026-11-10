@@ -28,6 +28,7 @@ public class MainForm : Form
     private readonly System.Windows.Forms.Timer _sleepSweep;
     private readonly List<string> _initialUrls;
     private readonly int _sleepAfterSec; // default 60 dtk; override via --sleep-after=N (benchmark)
+    private readonly int _deepAfterSec;  // M5: tidur > N dtk → WebView2 DIBUANG (0=mati; default 300)
     private readonly string _userDataDir;
     private CoreWebView2Environment? _env;
     private int _active = -1;
@@ -51,6 +52,7 @@ public class MainForm : Form
         Headless = args.Any(a => a == "--mcp");
 
         _sleepAfterSec = 60;
+        _deepAfterSec = 300;
         _userDataDir = string.IsNullOrWhiteSpace(AgentCfg.Profile)
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Flit", "Default")
             : Path.Combine(AgentConfig.ConfigDir, "profiles", AgentCfg.Profile); // M4: profil terpisah
@@ -62,6 +64,11 @@ public class MainForm : Form
                 int.TryParse(a["--sleep-after=".Length..], out var sec))
             {
                 _sleepAfterSec = Math.Max(3, sec);
+            }
+            else if (a.StartsWith("--deep-after=", StringComparison.Ordinal) &&
+                     int.TryParse(a["--deep-after=".Length..], out var deep))
+            {
+                _deepAfterSec = Math.Max(0, deep); // 0 = deep-discard mati
             }
             else if (!a.StartsWith("--", StringComparison.Ordinal))
             {
@@ -416,7 +423,7 @@ public class MainForm : Form
         else w.CoreWebView2.Navigate(tab.Url);
     }
 
-    private void ActivateTab(int idx)
+    private async void ActivateTab(int idx)
     {
         if (idx < 0 || idx >= _tabs.Count) return;
 
@@ -430,12 +437,22 @@ public class MainForm : Form
         _tabStrip.SetActive(idx);
 
         var tab = _tabs[idx];
-        if (tab.Web is { } w)
+        if (tab.Web is null)
+        {
+            // tab sudah dibuang (deep-discard) → hidupkan lagi (muat ulang URL terakhir)
+            SyncOmnibox();
+            Text = tab.Title + " — Flit";
+            await ReviveTabAsync(tab);
+            if (_active != idx) return; // user pindah tab lain saat hidup-lagi berjalan
+            if (tab.Web is { } nw) { nw.Visible = true; nw.BringToFront(); }
+        }
+        else if (tab.Web is { } w)
         {
             w.Visible = true;  // controller.IsVisible=true → auto-resume bila tertidur
             w.BringToFront();
         }
         tab.IsSleeping = false;
+        tab.SleepingSince = DateTime.MaxValue;
         tab.BackgroundReadyAt = DateTime.MaxValue;
 
         SyncOmnibox();
@@ -498,6 +515,7 @@ public class MainForm : Form
             if ((now - tab.BackgroundReadyAt).TotalSeconds >= _sleepAfterSec)
                 _ = SleepTabAsync(tab);
         }
+        SweepDeepDiscard(now);
     }
 
     private async Task SleepTabAsync(FlitTab tab)
@@ -507,9 +525,57 @@ public class MainForm : Form
         if (ok)
         {
             tab.IsSleeping = true;
+            tab.SleepingSince = DateTime.Now;
             _tabStrip.Invalidate();
         }
         // Gagal (mis. tab sedang main audio) → dicoba lagi sweep berikutnya
+    }
+
+    // M5: tab tidur terlalu lama → WebView2 DIBUANG seluruhnya (proses renderer ikut lenyap).
+    // Tradeoff jujur: state halaman (scroll/input) hilang — dibangunkan = muat ulang URL terakhir.
+    private void SweepDeepDiscard(DateTime now)
+    {
+        if (_deepAfterSec <= 0) return;
+        for (int i = 0; i < _tabs.Count; i++)
+        {
+            var tab = _tabs[i];
+            if (i == _active || !tab.IsSleeping || tab.Web is null || tab.IsLoading) continue;
+            if (tab.SleepingSince == DateTime.MaxValue) continue;
+            if ((now - tab.SleepingSince).TotalSeconds < _deepAfterSec) continue;
+            DiscardTab(tab);
+        }
+    }
+
+    private void DiscardTab(FlitTab tab)
+    {
+        if (tab.Web is null) return;
+        try
+        {
+            var src = tab.Web.CoreWebView2?.Source;
+            if (!string.IsNullOrEmpty(src) && !src.StartsWith("about:", StringComparison.Ordinal) &&
+                !src.StartsWith("data:", StringComparison.Ordinal))
+                tab.RestoreUrl = src;
+        }
+        catch { /* pakai tab.Url */ }
+        _host.Controls.Remove(tab.Web);
+        tab.Web.Dispose();   // proses msedgewebview2 milik tab ini dibunuh → RAM benar-benar turun
+        tab.Web = null;
+        tab.IsLoading = false;
+        AgentLog.Write("tab.discarded", new { title = tab.Title, url = tab.RestoreUrl });
+        _tabStrip.Invalidate();
+        UpdateRam();
+    }
+
+    /// <summary>Hidupkan lagi tab yang sudah dibuang: buat WebView2 baru + muat URL terakhir.</summary>
+    private async Task ReviveTabAsync(FlitTab tab)
+    {
+        if (tab.Web is not null) { await WakeTabAsync(tab); return; }
+        if (!string.IsNullOrEmpty(tab.RestoreUrl)) tab.Url = tab.RestoreUrl;
+        await EnsureWebAsync(tab);   // di ujungnya menavigasi ke tab.Url
+        tab.IsSleeping = false;
+        tab.SleepingSince = DateTime.MaxValue;
+        _tabStrip.Invalidate();
+        AgentLog.Write("tab.revived", new { url = tab.Url });
     }
 
     // RAM = shell + seluruh pohon msedgewebview2 milik Flit (di-filter user-data-folder)
@@ -641,7 +707,7 @@ public class MainForm : Form
         });
         mi.DropDownItems.Add(adItem);
         mi.DropDownItems.Add(Item("Tentang Flit", (s, e) =>
-            MessageBox.Show("Flit Browser 0.4 (M4)\nOne browser, both of us.\n\nWebView2 (Chromium Evergreen) • MPL-2.0\nAdblock: EasyList/EasyPrivacy/ABPindo (CC BY-SA 3.0)",
+            MessageBox.Show("Flit Browser 0.5 (M5)\nOne browser, both of us.\n\nWebView2 (Chromium Evergreen) • MPL-2.0\nAdblock: EasyList/EasyPrivacy/ABPindo (CC BY-SA 3.0)",
                 "Tentang Flit", MessageBoxButtons.OK, MessageBoxIcon.Information)));
 
         var bm = new ToolStripMenuItem("Bookmark") { ForeColor = fg };
@@ -957,10 +1023,12 @@ public class MainForm : Form
         return _tabs[idx];
     }
 
-    /// <summary>Bangunkan tab yang tidur (TrySuspend) sebelum disentuh agent/API.</summary>
-    private void WakeTab(FlitTab tab)
+    /// <summary>Bangunkan tab yang tidur (TrySuspend) sebelum disentuh agent/API.
+    /// Tab yang sudah DIBUANG (deep-discard) dihidupkan ulang — await hasilnya dulu.</summary>
+    private async Task WakeTabAsync(FlitTab tab)
     {
-        if (!tab.IsSleeping || tab.Web is null) return;
+        if (tab.Web is null) { await ReviveTabAsync(tab); return; }
+        if (!tab.IsSleeping) return;
         try { tab.Web.CoreWebView2?.Resume(); } catch { /* sudah bangun */ }
         tab.IsSleeping = false;
         if (!ReferenceEquals(Current, tab) && !tab.IsLoading) tab.BackgroundReadyAt = DateTime.Now;
@@ -981,9 +1049,10 @@ public class MainForm : Form
         {
             index = i,
             title = t.Title,
-            url = t.Web?.CoreWebView2?.Source ?? t.Url,
+            url = t.Web?.CoreWebView2?.Source ?? (t.RestoreUrl.Length > 0 ? t.RestoreUrl : t.Url),
             isLoading = t.IsLoading,
             isSleeping = t.IsSleeping,
+            isDiscarded = t.IsSleeping && t.Web is null, // M5: WebView2 dibuang — disentuh = dimuat ulang
             isActive = i == _active,
         });
         return JsonSerializer.Serialize(new { tabs });
@@ -1039,7 +1108,7 @@ public class MainForm : Form
             AgentLog.Write("agent.denied", new { action = "navigate", url });
             throw new McpToolError($"Domain tidak diizinkan: {new Uri(url).Host}");
         }
-        WakeTab(tab);
+        await WakeTabAsync(tab);
         if (tab.Web?.CoreWebView2 is null) throw new McpToolError("Engine tab belum siap");
         tab.IsLoading = true; // set dulu → WaitForLoadAsync tak kalah rasa dengan NavigationStarting
         tab.Url = url;
@@ -1052,7 +1121,7 @@ public class MainForm : Form
     private async Task<string> McpGetPageTextAsync(JsonElement args)
     {
         var tab = ResolveTab(args);
-        WakeTab(tab);
+        await WakeTabAsync(tab);
         if (tab.Web?.CoreWebView2 is null) throw new McpToolError("Engine tab belum siap");
         var max = Math.Clamp(ArgInt(args, "maxChars", 200_000), 100, 2_000_000);
         var raw = await tab.Web.CoreWebView2.ExecuteScriptAsync("document.body ? document.body.innerText : ''");
@@ -1077,7 +1146,7 @@ public class MainForm : Form
     private async Task<string> McpSnapshotAsync(JsonElement args)
     {
         var tab = ResolveTab(args);
-        WakeTab(tab);
+        await WakeTabAsync(tab);
         if (tab.Web?.CoreWebView2 is null) throw new McpToolError("Engine tab belum siap");
         var maxNodes = Math.Clamp(ArgInt(args, "maxNodes", 400), 10, 2000);
 
@@ -1115,7 +1184,7 @@ public class MainForm : Form
     private async Task<string> McpScreenshotAsync(JsonElement args)
     {
         var tab = ResolveTab(args);
-        WakeTab(tab);
+        await WakeTabAsync(tab);
         if (tab.Web?.CoreWebView2 is null) throw new McpToolError("Engine tab belum siap");
 
         var dir = Path.Combine(AgentConfig.ConfigDir, "screenshots");
@@ -1199,7 +1268,7 @@ public class MainForm : Form
     private async Task<string> McpFindAsync(JsonElement args)
     {
         var tab = ResolveTab(args);
-        WakeTab(tab);
+        await WakeTabAsync(tab);
         if (tab.Web?.CoreWebView2 is null) throw new McpToolError("Engine tab belum siap");
         var query = ArgStr(args, "query") ?? "";
         var js = FindJs.Replace("%Q%", JsonSerializer.Serialize(query));
@@ -1217,7 +1286,7 @@ public class MainForm : Form
         if (AgentCfg.RequireConfirm && !ArgBool(args, "confirm", false))
             throw new McpToolError("Aksi destruktif: tambahkan confirm:true (atau matikan --require-confirm).");
         var tab = ResolveTab(args);
-        WakeTab(tab);
+        await WakeTabAsync(tab);
         if (tab.Web?.CoreWebView2 is null) throw new McpToolError("Engine tab belum siap");
         var url = tab.Web.CoreWebView2.Source ?? "";
         if (url.Length > 0 && !AgentCfg.IsDomainAllowed(url))
@@ -1236,8 +1305,8 @@ public class MainForm : Form
         return JsonSerializer.Serialize(new
         {
             name = "Flit",
-            version = "0.4.0",
-            milestone = "M4",
+            version = "0.5.0",
+            milestone = "M5",
             tabs = _tabs.Count,
             active = _active,
             headless = Headless,

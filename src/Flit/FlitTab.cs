@@ -14,4 +14,8 @@ public class FlitTab
     // Kapan tab latar selesai memuat (mulai hitung mundur menuju tidur).
     // DateTime.MaxValue = sedang aktif / belum selesai load — tidak boleh tidur.
     public DateTime BackgroundReadyAt = DateTime.MaxValue;
+
+    // M5 deep-discard: kapan tab mulai tidur (hitung mundur menuju dibuang) + URL pemulihan.
+    public DateTime SleepingSince = DateTime.MaxValue;
+    public string RestoreUrl = string.Empty;
 }

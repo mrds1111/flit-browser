@@ -97,6 +97,7 @@ Prinsip a11y-first (FULL-FINAL §2): baca halaman dengan `flit_snapshot` /
 | `--proxy=<url>` | Proxy Chromium, mis. `http://127.0.0.1:8888` (M4) |
 | `--profile=<nama>` | Profil data terpisah: cookie/riwayat/cache di `Flit\profiles\<nama>` (M4) |
 | `--require-confirm` | Tool destruktif wajib `confirm:true` (M4) |
+| `--deep-after=N` | Tab tidur > N detik → WebView2 dibuang hemat RAM (default 300; `0` mati). Tab disentuh = dimuat ulang otomatis; `flit_list_tabs` menandai `isDiscarded` |
 | `--sleep-after=N` | Tab latar tidur setelah N detik (default 60) |
 | `URL...` | URL yang dibuka sebagai tab awal |
 
