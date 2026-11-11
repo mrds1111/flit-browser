@@ -15,7 +15,7 @@ public sealed class IdentityProfile
     public string UadPlatform = "Windows";  // navigator.userAgentData.platform
     public string UadPlatformVersion = "";  // getHighEntropyValues("platformVersion") — kosong = teruskan native
     public (string Brand, string Version)[] UadBrands =
-        { ("Chromium", "131"), ("Google Chrome", "131"), ("Not?A_Brand", "24") };
+        { ("Not-A.Brand", "99"), ("Chromium", "131"), ("Google Chrome", "131") };
     public bool UadMobile;
     public string Language = "id-ID";
     public string[] Languages = { "id-ID", "en-US" };

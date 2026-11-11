@@ -160,7 +160,7 @@ public class AgentConfig
             var v = chromeVer.Groups[1].Value;
             id.UadBrands = new (string, string)[]
             {
-                ("Not?A_Brand", "24"), ("Chromium", v), ("Google Chrome", v),
+                ("Not-A.Brand", "99"), ("Chromium", v), ("Google Chrome", v),
             };
         }
         var pv = System.Text.RegularExpressions.Regex.Match(UserAgent, @"Mac OS X (\d+[_\.]\d+[_\.]?\d*)");

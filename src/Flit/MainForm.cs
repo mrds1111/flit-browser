@@ -331,6 +331,45 @@ public class MainForm : Form
             {
                 AgentLog.Write("stealth.s2_fail", ex.Message);
             }
+
+            // S2.5 (M6, pelajaran Camoufox): Client Hints HTTP (Sec-Ch-Ua*) dibaca SERVER
+            // dan tak tersentuh injeksi JS — tanpa ini header membocorkan
+            // "Microsoft Edge WebView2" + platform Windows asli. Jawab dari level CDP.
+            try
+            {
+                var major = System.Text.RegularExpressions.Regex.Match(identity.UserAgent, @"Chrome/(\d+)");
+                var ver = major.Success ? major.Groups[1].Value : "131";
+                var lang = identity.Language;
+                var baseLang = lang.Length > 2 ? lang[..2] : lang;
+                var accept = lang.Equals("en-US", StringComparison.OrdinalIgnoreCase)
+                    ? "en-US,en"
+                    : $"{lang},{baseLang},en";
+                var metadata = new
+                {
+                    brands = identity.UadBrands.Select(b => new { brand = b.Brand, version = b.Version }),
+                    fullVersionList = identity.UadBrands.Select(b => new { brand = b.Brand, version = b.Version }),
+                    fullVersion = ver + ".0.0.0",
+                    platform = identity.UadPlatform,
+                    platformVersion = string.IsNullOrEmpty(identity.UadPlatformVersion) ? "0.0.0" : identity.UadPlatformVersion,
+                    architecture = identity.UserAgent.Contains("arm", StringComparison.OrdinalIgnoreCase) ? "arm" : "x86",
+                    bitness = "64",
+                    wow64 = false,
+                    model = "",
+                    mobile = identity.UadMobile,
+                };
+                var argsJson = JsonSerializer.Serialize(new
+                {
+                    userAgent = identity.UserAgent,
+                    acceptLanguage = accept,
+                    metadata,
+                });
+                await w.CoreWebView2.CallDevToolsProtocolMethodAsync("Network.setUserAgentOverride", argsJson);
+                AgentLog.Write("stealth.s25_headers", new { platform = identity.UadPlatform, ver });
+            }
+            catch (Exception ex)
+            {
+                AgentLog.Write("stealth.s25_fail", ex.Message);
+            }
         }
 
         w.CoreWebView2.DocumentTitleChanged += (s, _) =>
