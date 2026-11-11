@@ -99,6 +99,8 @@ Prinsip a11y-first (FULL-FINAL §2): baca halaman dengan `flit_snapshot` /
 | `--require-confirm` | Tool destruktif wajib `confirm:true` (M4) |
 | `--deep-after=N` | Tab tidur > N detik → WebView2 dibuang hemat RAM (default 300; `0` mati). Tab disentuh = dimuat ulang otomatis; `flit_list_tabs` menandai `isDiscarded` |
 | `--sleep-after=N` | Tab latar tidur setelah N detik (default 60) |
+| `--no-restore` | Jangan buka tab sesi terakhir saat start (M6; default restore aktif untuk mode jendela normal) |
+| `--extension-dir=<dir>` | Percobaan memuat extension Chromium (M6). **Terverifikasi TIDAK berfungsi**: argumen lolos sampai proses Chromium (dicek via Win32_Process) tapi WebView2 menolak memuat extension-nya. Disimpan untuk dokumentasi; jangan harapkan efek |
 | `URL...` | URL yang dibuka sebagai tab awal |
 
 ## Stealth S1+S2 (aktif)
@@ -123,6 +125,25 @@ didukung argumen ini — jalankan forwarder lokal tanpa auth bila perlu (batasan
 
 - Satu proses Flit = satu server MCP + seluruh tab (WebView2 shared environment).
 - Tab tidur (`TrySuspend`) dibangunkan otomatis saat agent menyentuhnya (`Resume`).
+
+## Userscript (M6) — pengganti extension
+
+WebView2 **tidak mendukung** extension Chromium (uji M6: `--load-extension` sampai
+ke proses browser tapi extension tetap tidak dimuat). Pengganti praktisnya:
+**userscript** — file `.js` kamu sendiri yang disuntikkan ke halaman pada
+DOMContentLoaded, ala Tampermonkey tanpa sandbox API.
+
+- Lokasi: `%LOCALAPPDATA%\Flit\userscripts\*.js` (menu → *Userscripts folder*).
+- Header sederhana:
+  ```
+  // ==UserScript==
+  // @match example.com        ← host, *.example.com, atau URL penuh
+  // ==/UserScript==
+  ```
+  Tanpa `@match` = jalan di semua situs. Dibaca ulang dari disk di setiap
+  navigasi baru — edit file, langsung berlaku, tanpa restart.
+- Terverifikasi uji M6: probe `@match example.com` menandai `documentElement`
+  di example.com (`"1"`) dan TIDAK jalan di example.org (`null`).
 - Screenshot di host tersembunyi memakai varian CDP `fromSurface:false` +
   batas waktu 10 dtk per varian — kalau engine tak mengirim frame, tool
   mengembalikan error (bukan menggantung) dan menyarankan snapshot/teks.

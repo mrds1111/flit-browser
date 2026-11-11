@@ -118,3 +118,53 @@ public static class BookmarksStore
 
     public static List<Bookmark> All() => new(Load());
 }
+
+/// <summary>Sesi terakhir (M6) — URL tab yang terbuka saat browser ditutup,
+/// dipulihkan saat start berikutnya. Satu file JSON: session.json.</summary>
+public static class SessionStore
+{
+    private static string Path => System.IO.Path.Combine(AgentConfig.ConfigDir, "session.json");
+
+    public static void Save(List<(string Url, string Title)> tabs, int active)
+    {
+        try
+        {
+            var payload = new
+            {
+                saved = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                active,
+                tabs = tabs.Select(t => new { url = t.Url, title = t.Title }).ToArray(),
+            };
+            Directory.CreateDirectory(AgentConfig.ConfigDir);
+            File.WriteAllText(Path, JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch { /* simpan sesi tidak boleh menghalangi tutup */ }
+    }
+
+    /// <summary>Null = tidak ada sesi layak dipulihkan.</summary>
+    public static (List<string> Urls, int Active)? Load()
+    {
+        try
+        {
+            if (!File.Exists(Path)) return null;
+            using var doc = JsonDocument.Parse(File.ReadAllText(Path));
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("tabs", out var tabsEl) || tabsEl.ValueKind != JsonValueKind.Array) return null;
+            var urls = new List<string>();
+            foreach (var t in tabsEl.EnumerateArray())
+            {
+                var u = t.TryGetProperty("url", out var ue) ? ue.GetString() : null;
+                if (!string.IsNullOrWhiteSpace(u)) urls.Add(u);
+            }
+            if (urls.Count == 0) return null;
+            var active = root.TryGetProperty("active", out var ae) && ae.TryGetInt32(out var a) ? a : 0;
+            return (urls, Math.Clamp(active, 0, urls.Count - 1));
+        }
+        catch { return null; }
+    }
+
+    public static void Clear()
+    {
+        try { if (File.Exists(Path)) File.Delete(Path); } catch { }
+    }
+}

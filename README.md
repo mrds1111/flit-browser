@@ -4,7 +4,9 @@
 
 Browser Windows ringan untuk manusia **dan** AI agent — shell C# .NET 10 + WinForms di atas WebView2 (Chromium Evergreen).
 
-**Status: M5 — deep-discard (tab latar lama dibuang, RAM benar-benar turun)** (bukti uji: [M5-RESULT.md](M5-RESULT.md), stealth/profil: [M4-RESULT.md](M4-RESULT.md), adblock: [M3-RESULT.md](M3-RESULT.md), agent: [M2-RESULT.md](M2-RESULT.md), benchmark: [M1-RESULT.md](M1-RESULT.md))
+**Status: M6 — quick wins + sesi & settings + UX tab + userscripts** (bukti uji: [M6-RESULT.md](M6-RESULT.md), deep-discard: [M5-RESULT.md](M5-RESULT.md), stealth/profil: [M4-RESULT.md](M4-RESULT.md), adblock: [M3-RESULT.md](M3-RESULT.md), agent: [M2-RESULT.md](M2-RESULT.md), benchmark: [M1-RESULT.md](M1-RESULT.md))
+
+> **Soal extension:** WebView2 (engine yang dikunci) **tidak mendukung** extension Chromium — terverifikasi uji M6: argumen `--load-extension` lolos sampai proses Chromium tapi engine menolak memuatnya. Sebagai gantinya Flit punya **adblock bawaan** dan **userscript** (script kamu sendiri per-situs, ala Tampermonkey) — lihat [M6-RESULT.md](M6-RESULT.md).
 
 ## Untuk AI agent (MCP)
 
@@ -23,7 +25,7 @@ claude mcp add flit -- C:\path\ke\Flit.exe --mcp
 | [BROWSERS.md](BROWSERS.md) | Katalog referensi 21 browser |
 | [REFERENCES.md](REFERENCES.md) | Referensi & keputusan lolos/tolak |
 | [NOTICES.md](NOTICES.md) | Kredit & kebijakan lisensi pihak ketiga |
-| [M0-RESULT.md](M0-RESULT.md) / [M1-RESULT.md](M1-RESULT.md) / [M2-RESULT.md](M2-RESULT.md) / [M3-RESULT.md](M3-RESULT.md) / [M4-RESULT.md](M4-RESULT.md) / [M5-RESULT.md](M5-RESULT.md) | Hasil & bukti uji per milestone |
+| [M0-RESULT.md](M0-RESULT.md) / [M1-RESULT.md](M1-RESULT.md) / [M2-RESULT.md](M2-RESULT.md) / [M3-RESULT.md](M3-RESULT.md) / [M4-RESULT.md](M4-RESULT.md) / [M5-RESULT.md](M5-RESULT.md) / [M6-RESULT.md](M6-RESULT.md) | Hasil & bukti uji per milestone |
 
 ## Lisensi
 

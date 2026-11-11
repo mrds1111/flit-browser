@@ -41,6 +41,19 @@ public class AgentConfig
     /// <summary>M4: tool MCP destruktif (close tab, evaluate) wajib membawa confirm:true.</summary>
     public bool RequireConfirm { get; set; } = false;
 
+    /// <summary>M6: buka lagi tab sesi terakhir saat start (mode jendela normal).</summary>
+    public bool RestoreSession { get; set; } = true;
+
+    /// <summary>M6: tab latar tidur setelah N detik (live via Settings).</summary>
+    public int SleepAfterSec { get; set; } = 60;
+
+    /// <summary>M6: tab tidur > N detik dibuang (deep-discard). 0 = mati.</summary>
+    public int DeepAfterSec { get; set; } = 300;
+
+    /// <summary>M6 (eksperimen): folder ekstensi unpacked → --load-extension Chromium.
+    /// TIDAK didukung resmi WebView2 — lihat M6-RESULT untuk hasil uji.</summary>
+    public List<string> ExtensionDirs { get; set; } = new();
+
     /// <summary>M3: adblock bawaan (network + cosmetic). Default NYALA.</summary>
     public bool AdblockEnabled { get; set; } = true;
 
@@ -90,7 +103,24 @@ public class AgentConfig
             else if (a.StartsWith("--profile=", StringComparison.Ordinal))
                 Profile = a["--profile=".Length..];
             else if (a == "--require-confirm") RequireConfirm = true;
+            else if (a.StartsWith("--extension-dir=", StringComparison.Ordinal))
+            {
+                var d = a["--extension-dir=".Length..].Trim();
+                if (d.Length > 0) ExtensionDirs.Add(d);
+            }
+            else if (a == "--no-restore") RestoreSession = false;
         }
+    }
+
+    /// <summary>Simpan config saat ini (dipakai jendela Settings). Tidak pernah melempar.</summary>
+    public void Save()
+    {
+        try
+        {
+            Directory.CreateDirectory(ConfigDir);
+            File.WriteAllText(ConfigPath, System.Text.Json.JsonSerializer.Serialize(this, Indent));
+        }
+        catch { /* simpan config gagal → biarkan nilai runtime tetap jalan */ }
     }
 
     /// <summary>

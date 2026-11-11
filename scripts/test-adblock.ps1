@@ -41,15 +41,15 @@ $r = ""
 for ($i = 0; $i -lt 40; $i++) {
     Start-Sleep -Seconds 3
     $r = CallFull "flit_status" @{} 10
-    if ($r -match 'blokir (\d+)') { if ([int]$Matches[1] -gt 0) { break } }
+    if ($r -match 'blocked (\d+)') { if ([int]$Matches[1] -gt 0) { break } }
 }
 "STATUS-AWAL: " + $r
 
-# navigasi situs ramah-iklan (detik.com) — counter blokir harus naik
+# navigasi situs ramah-iklan (detik.com) — counter blocked harus naik
 Call "flit_new_tab" @{ url = "https://www.detik.com"; activate = $true } 60 | Out-Host
 Start-Sleep -Seconds 5
 $r = CallFull "flit_status" @{} 10
-if ($r -match 'blokir (\d+)') { "BLOKIR-SETELAH-DETIK: " + $Matches[1] } else { "BLOKIR-SETELAH-DETIK: (tidak ada field) " + $r.Substring(0, [Math]::Min(300, $r.Length)) }
+if ($r -match 'blocked (\d+)') { "BLOCKED-AFTER-DETIK: " + $Matches[1] } else { "BLOCKED-AFTER-DETIK: (tidak ada field) " + $r.Substring(0, [Math]::Min(300, $r.Length)) }
 
 # cosmetic: style[data-flit] harus terpasang di dokumen
 CallFull "flit_evaluate_js" @{ script = "document.querySelectorAll('style[data-flit]').length" } | Out-Host

@@ -9,7 +9,7 @@ public class HistoryForm : Form
 
     public HistoryForm(Action<string> openUrl)
     {
-        Text = "Riwayat — Flit";
+        Text = "History — Flit";
         ClientSize = new Size(760, 520);
         BackColor = Color.FromArgb(32, 33, 36);
         ForeColor = Color.FromArgb(232, 234, 237);
@@ -27,11 +27,11 @@ public class HistoryForm : Form
             BackColor = Color.FromArgb(60, 60, 64),
             ForeColor = Color.FromArgb(232, 234, 237),
         };
-        _filter.PlaceholderText = "cari judul/URL…";
+        _filter.PlaceholderText = "search title/URL…";
         _filter.TextChanged += (s, e) => Reload();
         var clear = new Button
         {
-            Text = "Hapus semua",
+            Text = "Clear all",
             FlatStyle = FlatStyle.Flat,
             BackColor = Color.FromArgb(60, 60, 64),
             ForeColor = Color.FromArgb(232, 234, 237),
@@ -43,7 +43,7 @@ public class HistoryForm : Form
         clear.FlatAppearance.BorderSize = 0;
         clear.Click += (s, e) =>
         {
-            if (MessageBox.Show(this, "Hapus SELURUH riwayat?", "Flit", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+            if (MessageBox.Show(this, "Clear ALL history?", "Flit", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
             {
                 HistoryStore.Clear();
                 _all = new List<HistoryStore.Entry>();
@@ -63,8 +63,8 @@ public class HistoryForm : Form
             ForeColor = Color.FromArgb(232, 234, 237),
             BorderStyle = BorderStyle.None,
         };
-        _list.Columns.Add("Waktu", 130);
-        _list.Columns.Add("Judul", 240);
+        _list.Columns.Add("Time", 130);
+        _list.Columns.Add("Title", 240);
         _list.Columns.Add("URL", 360);
         _list.DoubleClick += (s, e) =>
         {

@@ -16,6 +16,9 @@ public static class AdblockStore
     public static long BlockedCount;                       // dinaikkan handler (interlocked tak wajib utk status)
     public static string Source { get; private set; } = "memuat...";
 
+    /// <summary>Status saklar yang dipilih user (beda dari Current: on tapi masih memuat daftar).</summary>
+    public static bool Enabled => _enabled;
+
     /// <summary>Pecahan JS cosmetic siap-injeksi (DOMContentLoaded + ExecuteScriptAsync).
     /// Diisi tiap swap engine; kosong saat adblock mati.</summary>
     public static volatile string[] CosmeticScriptsCache = Array.Empty<string>();

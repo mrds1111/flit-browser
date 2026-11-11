@@ -11,6 +11,9 @@
     "proxy": "",
     "profile": "",
     "requireConfirm": false,
-    "adblockEnabled": true
+    "adblockEnabled": true,
+    "restoreSession": true,
+    "sleepAfterSec": 60,
+    "deepAfterSec": 300
   }
 }

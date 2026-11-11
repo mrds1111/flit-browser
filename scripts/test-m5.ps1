@@ -26,13 +26,15 @@ function CallFull($tool, $argsH, [int]$sec = 45) {
     return Recv $sec
 }
 function RamOf($resp) {
-    if ($resp -match 'RAM: (\d+) MB private \\u2022 (\d+) MB WS') { return "private=$($Matches[1]) MB WS=$($Matches[2]) MB" }
-    return "(tidak terbaca)"
+    if ($resp -match 'RAM: (\d+) MB private') { $priv = $Matches[1] } else { return "(tidak terbaca)" }
+    $ws = if ($resp -match '(\d+) MB WS') { $Matches[1] } else { "?" }
+    return "private=$priv MB WS=$ws MB"
 }
 
 Snd @{ jsonrpc = "2.0"; id = 99; method = "initialize"; params = @{ protocolVersion = "2024-11-05"; capabilities = @{}; clientInfo = @{ name = "t"; version = "0" } } }
 Recv | Out-Null
 
+Start-Sleep -Seconds 2 # beri timer RAM (interval 3 dtk) kesempatan laporan pertama
 $r = CallFull "flit_status" @{} 10
 "RAM-AWAL: " + (RamOf $r)
 
@@ -42,13 +44,14 @@ Start-Sleep -Seconds 3
 $r = CallFull "flit_status" @{} 10
 "RAM-2TAB-HIDUP: " + (RamOf $r)
 $r = CallFull "flit_list_tabs" @{} 10
-if ($r -match 'isDiscarded\\":(\w+)\\",\\"isActive\\":false') { "SEBELUM: isDiscarded=" + $Matches[1] }
+# regex di-anchor ke url tab 1 (example.org) — isDiscarded tab 0 selalu false (tab aktif tak pernah dibuang)
+if ($r -match 'example\.org[^\]]*?isDiscarded\\u0022:(\w+)') { "SEBELUM: isDiscarded=" + $Matches[1] }
 
 "menunggu tidur (5 dtk) + dibuang (15 dtk) + sapuan..."
 Start-Sleep -Seconds 45
 
 $r = CallFull "flit_list_tabs" @{} 10
-if ($r -match 'isDiscarded\\":(\w+)\\",\\"isActive\\":false') { "SESUDAH: isDiscarded=" + $Matches[1] }
+if ($r -match 'example\.org[^\]]*?isDiscarded\\u0022:(\w+)') { "SESUDAH: isDiscarded=" + $Matches[1] }
 $r = CallFull "flit_status" @{} 10
 "RAM-SETELAH-DIBUANG: " + (RamOf $r)
 
@@ -56,7 +59,7 @@ $r = CallFull "flit_status" @{} 10
 $r = CallFull "flit_evaluate_js" @{ script = "document.title + ' | ' + location.href"; tabIndex = 1; confirm = $true } 60
 "EVAL-TAB-YANG-DIBUANG: " + $r
 $r = CallFull "flit_list_tabs" @{} 10
-if ($r -match 'isDiscarded\\":(\w+)\\",\\"isActive\\":false') { "SETELAH-SENTUH: isDiscarded=" + $Matches[1] }
+if ($r -match 'example\.org[^\]]*?isDiscarded\\u0022:(\w+)') { "SETELAH-SENTUH: isDiscarded=" + $Matches[1] }
 
 $p.StandardInput.Close(); Start-Sleep -Seconds 2
 try { if (-not $p.HasExited) { $p.Kill($true) } } catch {}

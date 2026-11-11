@@ -16,7 +16,7 @@ public class MainForm : Form
 
     // Halaman tab baru — inline, gelap, tanpa akses disk
     private const string NewTabHtml =
-        """<!doctype html><html><head><meta charset="utf-8"><title>Tab Baru</title><style>body{background:#202124;color:#e8eaed;font-family:'Segoe UI',sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}main{text-align:center}h1{font-weight:300;font-size:42px;letter-spacing:8px;margin-bottom:4px}p{color:#9aa0a6;margin:6px 0}a{color:#8ab4f8;text-decoration:none;margin:0 10px;font-size:15px}a:hover{text-decoration:underline}</style></head><body><main><h1>FLIT</h1><p><em>One browser, both of us.</em></p><p style="margin-top:28px"><a href="https://duckduckgo.com">DuckDuckGo</a><a href="https://github.com">GitHub</a><a href="https://id.wikipedia.org">Wikipedia</a><a href="https://news.ycombinator.com">Hacker News</a></p></main></body></html>""";
+        """<!doctype html><html><head><meta charset="utf-8"><title>New Tab</title><style>body{background:#202124;color:#e8eaed;font-family:'Segoe UI',sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}main{text-align:center}h1{font-weight:300;font-size:42px;letter-spacing:8px;margin-bottom:4px}p{color:#9aa0a6;margin:6px 0}a{color:#8ab4f8;text-decoration:none;margin:0 10px;font-size:15px}a:hover{text-decoration:underline}</style></head><body><main><h1>FLIT</h1><p><em>One browser, both of us.</em></p><p style="margin-top:28px"><a href="https://duckduckgo.com">DuckDuckGo</a><a href="https://github.com">GitHub</a><a href="https://en.wikipedia.org">Wikipedia</a><a href="https://news.ycombinator.com">Hacker News</a></p></main></body></html>""";
 
     private readonly List<FlitTab> _tabs = new();
     private readonly TabStrip _tabStrip;
@@ -27,15 +27,16 @@ public class MainForm : Form
     private readonly System.Windows.Forms.Timer _ramTimer;
     private readonly System.Windows.Forms.Timer _sleepSweep;
     private readonly List<string> _initialUrls;
-    private readonly int _sleepAfterSec; // default 60 dtk; override via --sleep-after=N (benchmark)
-    private readonly int _deepAfterSec;  // M5: tidur > N dtk → WebView2 DIBUANG (0=mati; default 300)
+    private int _sleepAfterSec; // default 60 dtk (config/Settings); override via --sleep-after=N
+    private int _deepAfterSec;  // M5: tidur > N dtk → WebView2 DIBUANG (0=mati; default 300)
     private readonly string _userDataDir;
     private CoreWebView2Environment? _env;
     private int _active = -1;
+    private ToolStripMenuItem? _adMenuItem; // M6: label adblock di menu (di-refresh saat engine siap)
 
     // ==== M3: find bar + bookmark star ====
     private readonly Panel _findBar = new() { Dock = DockStyle.Bottom, Height = 36, Visible = false, BackColor = Color.FromArgb(43, 43, 43), Padding = new Padding(6, 5, 6, 5) };
-    private readonly TextBox _findBox = new() { Width = 240, BorderStyle = BorderStyle.FixedSingle, BackColor = Color.FromArgb(60, 60, 64), ForeColor = Color.FromArgb(232, 234, 237) };
+    private readonly TextBox _findBox = new() { Width = 240, BorderStyle = BorderStyle.FixedSingle, BackColor = Color.FromArgb(60, 60, 64), ForeColor = Color.FromArgb(232, 234, 237), PlaceholderText = "find in page…" };
     private readonly Label _findCount = new() { Width = 90, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.FromArgb(154, 160, 166), Text = "" };
     private Button? _star;
     private string _lastFindQuery = "";
@@ -51,8 +52,8 @@ public class MainForm : Form
         AgentCfg.ApplyArgs(args);
         Headless = args.Any(a => a == "--mcp");
 
-        _sleepAfterSec = 60;
-        _deepAfterSec = 300;
+        _sleepAfterSec = AgentCfg.SleepAfterSec;
+        _deepAfterSec = AgentCfg.DeepAfterSec;
         _userDataDir = string.IsNullOrWhiteSpace(AgentCfg.Profile)
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Flit", "Default")
             : Path.Combine(AgentConfig.ConfigDir, "profiles", AgentCfg.Profile); // M4: profil terpisah
@@ -187,6 +188,8 @@ public class MainForm : Form
         if (!string.IsNullOrEmpty(AgentCfg.Language)) opts.Language = AgentCfg.Language;   // S1: --lang
         if (!string.IsNullOrEmpty(AgentCfg.Proxy))                                          // M4: proxy
             opts.AdditionalBrowserArguments += " --proxy-server=" + AgentCfg.Proxy;
+        if (AgentCfg.ExtensionDirs.Count > 0)                                               // M6: eksperimen ekstensi
+            opts.AdditionalBrowserArguments += " --load-extension=" + string.Join(",", AgentCfg.ExtensionDirs);
         return await CoreWebView2Environment.CreateAsync(userDataFolder: _userDataDir, options: opts);
     }
 
@@ -221,6 +224,7 @@ public class MainForm : Form
             case Keys.Control | Keys.D: _ = ToggleBookmarkAsync(); return true;
             case Keys.Control | Keys.H: ShowHistory(); return true;
             case Keys.Control | Keys.S: _ = SavePageAsync(mhtml: true); return true;
+            case Keys.Control | Keys.P: ShowPrint(); return true;
             case Keys.Escape when _findBar.Visible: HideFindBar(); return true;
         }
         return base.ProcessCmdKey(ref msg, keyData);
@@ -299,6 +303,13 @@ public class MainForm : Form
         tab.Web = w;
         await w.EnsureCoreWebView2Async(_env);
 
+        // M6: quick wins harian — semua bawaan engine, dipastikan nyala eksplisit
+        var st = w.CoreWebView2.Settings;
+        st.IsPasswordAutosaveEnabled = true;   // simpan password (lokal, terenkripsi DPAPI)
+        st.IsGeneralAutofillEnabled = true;    // isi form otomatis
+        st.AreDevToolsEnabled = true;          // F12
+        st.IsZoomControlEnabled = true;        // Ctrl+scroll / Ctrl+-+
+
         // S1: UA per-profil (override engine, diterapkan pada tiap WebView2 baru)
         if (!string.IsNullOrEmpty(AgentCfg.UserAgent))
             w.CoreWebView2.Settings.UserAgent = AgentCfg.UserAgent;
@@ -324,7 +335,7 @@ public class MainForm : Form
 
         w.CoreWebView2.DocumentTitleChanged += (s, _) =>
         {
-            tab.Title = string.IsNullOrEmpty(w.CoreWebView2.DocumentTitle) ? "Tab Baru" : w.CoreWebView2.DocumentTitle;
+            tab.Title = string.IsNullOrEmpty(w.CoreWebView2.DocumentTitle) ? "New Tab" : w.CoreWebView2.DocumentTitle;
             if (ReferenceEquals(Current, tab)) Text = tab.Title + " — Flit";
             _tabStrip.Invalidate();
         };
@@ -371,12 +382,12 @@ public class MainForm : Form
                 op.StateChanged += (_, _) =>
                 {
                     if (op.State == CoreWebView2DownloadState.Completed)
-                        BeginInvoke(new Action(() => _status.Text = "Unduhan selesai: " + op.ResultFilePath));
+                        BeginInvoke(new Action(() => _status.Text = "Download finished: " + op.ResultFilePath));
                     else if (op.State == CoreWebView2DownloadState.Interrupted)
-                        BeginInvoke(new Action(() => _status.Text = "Unduhan terputus: " + op.ResultFilePath));
+                        BeginInvoke(new Action(() => _status.Text = "Download interrupted: " + op.ResultFilePath));
                 };
                 AgentLog.Write("download", new { url = op.Uri, path = op.ResultFilePath });
-                _status.Text = "Mengunduh: " + op.ResultFilePath;
+                _status.Text = "Downloading: " + op.ResultFilePath;
             }
             catch { /* unduhan gagal atur → biarkan default behavior */ }
         };
@@ -416,6 +427,17 @@ public class MainForm : Form
                     _ = w.CoreWebView2.ExecuteScriptAsync(js);
             }
             catch (Exception ex) { AgentLog.Write("adblock.cosmetic_fail", ex.Message); }
+
+            // M6: userscripts — pengganti praktis extension (WebView2 menolak --load-extension)
+            try
+            {
+                var host = "";
+                try { host = new Uri(w.CoreWebView2.Source).Host; } catch { }
+                foreach (var (script, matches) in UserScripts.Load())
+                    if (UserScripts.Matches(matches, host))
+                        _ = w.CoreWebView2.ExecuteScriptAsync(script);
+            }
+            catch (Exception ex) { AgentLog.Write("userscript.fail", ex.Message); }
         };
 
         tab.IsLoading = true;
@@ -510,7 +532,7 @@ public class MainForm : Form
         for (int i = 0; i < _tabs.Count; i++)
         {
             var tab = _tabs[i];
-            if (i == _active || tab.IsSleeping || tab.Web is null || tab.IsLoading) continue;
+            if (i == _active || tab.IsSleeping || tab.Web is null || tab.IsLoading || tab.IsPinned) continue;
             if (tab.BackgroundReadyAt == DateTime.MaxValue) continue;
             if ((now - tab.BackgroundReadyAt).TotalSeconds >= _sleepAfterSec)
                 _ = SleepTabAsync(tab);
@@ -539,7 +561,7 @@ public class MainForm : Form
         for (int i = 0; i < _tabs.Count; i++)
         {
             var tab = _tabs[i];
-            if (i == _active || !tab.IsSleeping || tab.Web is null || tab.IsLoading) continue;
+            if (i == _active || !tab.IsSleeping || tab.Web is null || tab.IsLoading || tab.IsPinned) continue;
             if (tab.SleepingSince == DateTime.MaxValue) continue;
             if ((now - tab.SleepingSince).TotalSeconds < _deepAfterSec) continue;
             DiscardTab(tab);
@@ -601,7 +623,7 @@ public class MainForm : Form
 
             double mbWs = ws / 1024.0 / 1024.0, mbPm = pm / 1024.0 / 1024.0;
             _ram.Text = $"RAM: {mbPm:F0} MB private • {mbWs:F0} MB WS" +
-                        (AdblockStore.Current is not null ? $" • blokir {AdblockStore.BlockedCount}" : "");
+                        (AdblockStore.Current is not null ? $" • blocked {AdblockStore.BlockedCount}" : "");
         }
         catch { /* ticker tidak boleh bikin crash */ }
     }
@@ -636,7 +658,20 @@ public class MainForm : Form
         {
             if (_initialUrls.Count == 0)
             {
-                await OpenTabAsync(null);
+                // M6: pulihkan sesi terakhir (hanya mode jendela normal + config mengizinkan)
+                var sess = !Headless && AgentCfg.RestoreSession ? SessionStore.Load() : null;
+                if (sess is not null)
+                {
+                    var (urls, active) = sess.Value;
+                    AgentLog.Write("session.restore", new { tabs = urls.Count, active });
+                    for (int i = 0; i < urls.Count; i++)
+                        await OpenTabAsync(urls[i], activate: i == active);
+                    if (_active < 0 && _tabs.Count > 0) ActivateTab(0);
+                }
+                else
+                {
+                    await OpenTabAsync(null);
+                }
             }
             else
             {
@@ -659,7 +694,7 @@ public class MainForm : Form
         }
         catch (Exception ex)
         {
-            _status.Text = "Gagal init WebView2: " + ex.Message;
+            _status.Text = "WebView2 init failed: " + ex.Message;
             AgentLog.Write("startup.failed", ex.Message);
         }
     }
@@ -677,6 +712,37 @@ public class MainForm : Form
         base.OnFormClosed(e);
     }
 
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        // M6: simpan sesi (mode jendela normal saja; about:/data: tak layak dipulihkan)
+        // UserClosing = tombol X/Alt+F4/Close(); TaskManagerClosing = "End task" yang rapi —
+        // keduanya layak disimpan. Hanya WindowsShutDown yang dilewati.
+        if (!Headless && e.CloseReason != CloseReason.WindowsShutDown)
+        {
+            try
+            {
+                var tabs = new List<(string, string)>();
+                for (int i = 0; i < _tabs.Count; i++)
+                {
+                    var t = _tabs[i];
+                    var url = t.Web?.CoreWebView2?.Source ?? (t.RestoreUrl.Length > 0 ? t.RestoreUrl : t.Url);
+                    if (string.IsNullOrWhiteSpace(url) ||
+                        url.StartsWith("about:", StringComparison.Ordinal) ||
+                        url.StartsWith("data:", StringComparison.Ordinal))
+                        continue;
+                    tabs.Add((url, t.Title));
+                    if (i == _active) _m6activeSaved = tabs.Count - 1;
+                }
+                if (tabs.Count > 0) SessionStore.Save(tabs, _m6activeSaved);
+                else SessionStore.Clear();
+            }
+            catch { /* tutup tidak boleh gagal karena sesi */ }
+        }
+        base.OnFormClosing(e);
+    }
+
+    private int _m6activeSaved;
+
     // ==================== M3: fitur harian ====================
 
     private MenuStrip BuildMenu(Color chromeBg, Color fg, Color dim)
@@ -690,25 +756,37 @@ public class MainForm : Form
         };
 
         var mi = new ToolStripMenuItem("Menu") { ForeColor = fg };
-        mi.DropDownItems.Add(Item("Tab baru    Ctrl+T", (s, e) => _ = OpenTabAsync(null)));
-        mi.DropDownItems.Add(Item("Cari di halaman    Ctrl+F", (s, e) => ShowFindBar()));
-        mi.DropDownItems.Add(Item("Riwayat    Ctrl+H", (s, e) => ShowHistory()));
+        mi.DropDownItems.Add(Item("New tab    Ctrl+T", (s, e) => _ = OpenTabAsync(null)));
+        mi.DropDownItems.Add(Item("Find in page    Ctrl+F", (s, e) => ShowFindBar()));
+        mi.DropDownItems.Add(Item("History    Ctrl+H", (s, e) => ShowHistory()));
         mi.DropDownItems.Add(new ToolStripSeparator());
-        mi.DropDownItems.Add(Item("Simpan halaman (MHTML)    Ctrl+S", (s, e) => _ = SavePageAsync(true)));
-        mi.DropDownItems.Add(Item("Simpan PDF", (s, e) => _ = SavePageAsync(false)));
+        mi.DropDownItems.Add(Item("Save page (MHTML)    Ctrl+S", (s, e) => _ = SavePageAsync(true)));
+        mi.DropDownItems.Add(Item("Save as PDF", (s, e) => _ = SavePageAsync(false)));
+        mi.DropDownItems.Add(Item("Print…    Ctrl+P", (s, e) => ShowPrint()));
         mi.DropDownItems.Add(new ToolStripSeparator());
         ToolStripMenuItem adItem = null!;
-        adItem = Item("Adblock: " + (AdblockStore.Current is null ? "NONAKTIF" : "aktif"), (s, e) =>
+        adItem = Item(AdblockLabelText(), (s, e) =>
         {
-            var turningOn = AdblockStore.Current is null;
+            var turningOn = !AdblockStore.Enabled;   // M6: ikuti saklar sebenarnya, bukan kondisi engine
             AdblockStore.SetEnabled(turningOn, AgentCfg, OnAdblockEngineReady);
-            adItem.Text = "Adblock: " + (turningOn ? "aktif" : "NONAKTIF");
-            _status.Text = turningOn ? "Adblock dinyalakan (memuat daftar...)" : "Adblock dimatikan";
+            UpdateAdblockLabel();
+            _status.Text = turningOn ? "Adblock on (loading lists…)" : "Adblock off";
         });
+        _adMenuItem = adItem;
         mi.DropDownItems.Add(adItem);
-        mi.DropDownItems.Add(Item("Tentang Flit", (s, e) =>
-            MessageBox.Show("Flit Browser 0.5 (M5)\nOne browser, both of us.\n\nWebView2 (Chromium Evergreen) • MPL-2.0\nAdblock: EasyList/EasyPrivacy/ABPindo (CC BY-SA 3.0)",
-                "Tentang Flit", MessageBoxButtons.OK, MessageBoxIcon.Information)));
+        mi.DropDownItems.Add(Item("Mute tab", (s, e) => ToggleMute()));
+        mi.DropDownItems.Add(Item("Pin tab", (s, e) => TogglePin()));
+        mi.DropDownItems.Add(Item("Userscripts folder", (s, e) =>
+        {
+            Directory.CreateDirectory(UserScripts.Dir);
+            System.Diagnostics.Process.Start("explorer.exe", UserScripts.Dir);
+        }));
+        mi.DropDownItems.Add(Item("Clear browsing data…", (s, e) => _ = ClearBrowsingDataAsync()));
+        mi.DropDownItems.Add(Item("Settings…", (s, e) => ShowSettings()));
+        mi.DropDownItems.Add(new ToolStripSeparator());
+        mi.DropDownItems.Add(Item("About Flit", (s, e) =>
+            MessageBox.Show("Flit Browser 0.6 (M6)\nOne browser, both of us.\n\nWebView2 (Chromium Evergreen) • MPL-2.0\nAdblock: EasyList/EasyPrivacy/ABPindo (CC BY-SA 3.0)",
+                "About Flit", MessageBoxButtons.OK, MessageBoxIcon.Information)));
 
         var bm = new ToolStripMenuItem("Bookmark") { ForeColor = fg };
         bm.DropDownOpening += (s, e) => RebuildBookmarkMenu(bm);
@@ -728,7 +806,7 @@ public class MainForm : Form
         if (cur is { Length: > 10 } && !cur.StartsWith("about:", StringComparison.Ordinal))
         {
             var marked = BookmarksStore.IsBookmarked(cur);
-            bm.DropDownItems.Add(Item(marked ? "★ Hapus bookmark halaman ini" : "☆ Bookmark halaman ini    Ctrl+D",
+            bm.DropDownItems.Add(Item(marked ? "★ Remove bookmark for this page" : "☆ Bookmark this page    Ctrl+D",
                 (s, e) => _ = ToggleBookmarkAsync()));
         }
         var all = BookmarksStore.All();
@@ -742,7 +820,7 @@ public class MainForm : Form
             bm.DropDownItems.Add(it);
         }
         if (all.Count == 0)
-            bm.DropDownItems.Add(Item("(kosong — tekan Ctrl+D untuk mem-bookmark)", (s, e) => { }));
+            bm.DropDownItems.Add(Item("(empty — press Ctrl+D to bookmark)", (s, e) => { }));
     }
 
     // ---- find in page ----
@@ -813,14 +891,14 @@ public class MainForm : Form
                 var json = JsonSerializer.Deserialize<string>(raw) ?? "{}";
                 using var doc = JsonDocument.Parse(json);
                 var count = doc.RootElement.TryGetProperty("count", out var c) ? c.GetInt32() : 0;
-                _findCount.Text = count == 0 ? "tidak ada" : count + " hasil";
+                _findCount.Text = count == 0 ? "no matches" : count + (count == 1 ? " match" : " matches");
             }
             else
             {
                 var js = FindNextJs.Replace("%Q%", JsonSerializer.Serialize(q))
                                    .Replace("%BACK%", back ? "true" : "false");
                 var raw = await core.ExecuteScriptAsync(js);
-                if (raw == "false") _findCount.Text = "tepi halaman";
+                if (raw == "false") _findCount.Text = "page edge";
             }
         }
         catch { /* find tidak boleh crash */ }
@@ -838,7 +916,7 @@ public class MainForm : Form
             if (string.IsNullOrEmpty(url) || url.StartsWith("about:", StringComparison.Ordinal))
                 return Task.CompletedTask;
             var added = BookmarksStore.Toggle(url, Current!.Title);
-            _status.Text = added ? "★ Dibookmark: " + url : "Bookmark dihapus";
+            _status.Text = added ? "★ Bookmarked: " + url : "Bookmark removed";
             UpdateStar();
             AgentLog.Write("bookmark", new { url, added });
         }
@@ -849,6 +927,89 @@ public class MainForm : Form
     private void ShowHistory()
     {
         new HistoryForm(url => _ = OpenTabAsync(url)).Show(this);
+    }
+
+    // ==================== M6: print, mute, pin, clear data, settings ====================
+
+    private static string AdblockLabelText() =>
+        "Adblock: " + (AdblockStore.Enabled
+            ? (AdblockStore.Current is null ? "on (loading lists…)" : "on")
+            : "off");
+
+    private void UpdateAdblockLabel()
+    {
+        if (_adMenuItem is not null) _adMenuItem.Text = AdblockLabelText();
+    }
+
+    private void ShowPrint()
+    {
+        var core = Current?.Web?.CoreWebView2;
+        if (core is null) return;
+        try { core.ShowPrintUI(CoreWebView2PrintDialogKind.Browser); }
+        catch (Exception ex) { _status.Text = "Print failed: " + ex.Message; }
+    }
+
+    private void ToggleMute()
+    {
+        var core = Current?.Web?.CoreWebView2;
+        if (core is null) return;
+        try
+        {
+            core.IsMuted = !core.IsMuted;
+            _status.Text = core.IsMuted ? "Tab muted" : "Tab unmuted";
+            _tabStrip.Invalidate();
+        }
+        catch (Exception ex) { _status.Text = "Mute failed: " + ex.Message; }
+    }
+
+    private void TogglePin()
+    {
+        var tab = Current;
+        if (tab is null) return;
+        tab.IsPinned = !tab.IsPinned;
+        if (tab.IsPinned)
+        {
+            tab.IsSleeping = false;
+            tab.SleepingSince = DateTime.MaxValue;
+            tab.BackgroundReadyAt = DateTime.MaxValue;
+            try { tab.Web?.CoreWebView2?.Resume(); } catch { }
+        }
+        _status.Text = tab.IsPinned ? "Tab pinned (won't sleep/discard)" : "Tab unpinned";
+        _tabStrip.Invalidate();
+    }
+
+    private async Task ClearBrowsingDataAsync()
+    {
+        var core = Current?.Web?.CoreWebView2;
+        if (core is null) return;
+        var ok = MessageBox.Show(this,
+            "Clear cookies, cache, site data and history?\nBookmarks and saved passwords are kept.",
+            "Flit", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (ok != DialogResult.Yes) return;
+        try
+        {
+            HistoryStore.Clear();
+            SessionStore.Clear();
+            await core.Profile.ClearBrowsingDataAsync(CoreWebView2BrowsingDataKinds.AllProfile);
+            _status.Text = "Browsing data cleared";
+            AgentLog.Write("browsing_data.cleared", null);
+        }
+        catch (Exception ex) { _status.Text = "Clear failed: " + ex.Message; }
+    }
+
+    private void ShowSettings()
+    {
+        using var f = new SettingsForm(AgentCfg);
+        f.OnApplied = cfg =>
+        {
+            _sleepAfterSec = cfg.SleepAfterSec;
+            _deepAfterSec = cfg.DeepAfterSec;
+            if (cfg.AdblockEnabled != AdblockStore.Enabled)
+                AdblockStore.SetEnabled(cfg.AdblockEnabled, cfg, OnAdblockEngineReady);
+            UpdateAdblockLabel();
+            _status.Text = "Settings saved";
+        };
+        f.ShowDialog(this);
     }
 
     private async Task SavePageAsync(bool mhtml)
@@ -866,7 +1027,7 @@ public class MainForm : Form
                 var data = doc.RootElement.GetProperty("data").GetString() ?? "";
                 var path = SavePathFor(title, ".mhtml");
                 await File.WriteAllTextAsync(path, data);
-                _status.Text = "Tersimpan: " + path;
+                _status.Text = "Saved: " + path;
                 AgentLog.Write("save.mhtml", new { url = core.Source, path });
             }
             else
@@ -877,13 +1038,13 @@ public class MainForm : Form
                 var b64 = doc.RootElement.GetProperty("data").GetString() ?? "";
                 var path = SavePathFor(title, ".pdf");
                 await File.WriteAllBytesAsync(path, Convert.FromBase64String(b64));
-                _status.Text = "Tersimpan: " + path;
+                _status.Text = "Saved: " + path;
                 AgentLog.Write("save.pdf", new { url = core.Source, path });
             }
         }
         catch (Exception ex)
         {
-            _status.Text = "Gagal simpan: " + ex.Message;
+            _status.Text = "Save failed: " + ex.Message;
         }
     }
 
@@ -937,7 +1098,8 @@ public class MainForm : Form
                     foreach (var js in AdblockStore.CosmeticScriptsCache)
                         _ = c.ExecuteScriptAsync(js); // dokumen saat ini; dokumen berikutnya lewat DOMContentLoaded
                 }
-                _status.Text = $"Adblock aktif: {engine.NetRules} aturan network • {engine.CosmeticRules} cosmetic";
+                _status.Text = $"Adblock on: {engine.NetRules} network rules • {engine.CosmeticRules} cosmetic";
+                UpdateAdblockLabel();
             }
             catch { }
         }));
@@ -1305,8 +1467,8 @@ public class MainForm : Form
         return JsonSerializer.Serialize(new
         {
             name = "Flit",
-            version = "0.5.0",
-            milestone = "M5",
+            version = "0.6.0",
+            milestone = "M6",
             tabs = _tabs.Count,
             active = _active,
             headless = Headless,
