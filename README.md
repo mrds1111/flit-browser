@@ -20,6 +20,7 @@ claude mcp add flit -- C:\path\ke\Flit.exe --mcp
 |---|---|
 | [FULL-FINAL.md](FULL-FINAL.md) | Spesifikasi final v1.0 |
 | [MCP.md](MCP.md) | Server MCP: tools, keamanan agent, konfigurasi |
+| [STEALTH.md](STEALTH.md) | Inventaris stealth/anti-detection + peta jalan S3 (pola Camoufox) |
 | [CONCEPT.md](CONCEPT.md) | Konsep & keputusan fitur (masuk/dibuang/ditunda) |
 | [ADBLOCK-DESIGN.md](ADBLOCK-DESIGN.md) | Desain adblock terverifikasi |
 | [BROWSERS.md](BROWSERS.md) | Katalog referensi 21 browser |
