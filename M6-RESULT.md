@@ -28,6 +28,15 @@ Tanggal: 2026-11-11 • Status: **SELESAI** • Tema: quick wins + sesi & settin
   engine termuat → selalu "nonaktif") dan logika kliknya terbalik. Kini ada
   `AdblockStore.Enabled` + label dirender ulang saat diklik & saat engine siap:
   `Adblock: on (loading…)` / `on` / `off`.
+- **Bug fatal menu ditemukan & diperbaiki** (laporan pemilik: "menu semuanya gak
+  bisa dipencet"): helper `Item()` menerima `onClick` tapi **tak pernah memasangnya**
+  ke event Click — seluruh item menu mati sejak commit awal. Diperbaiki
+  (`it.Click += onClick`) dan diverifikasi dengan interaksi nyata (UI Automation +
+  klik mouse sungguhan + screenshot):
+  - klik "New tab" → judul jendela berubah `"New Tab — Flit"` ✓
+  - klik "Settings…" → dialog Settings terbuka (tertangkap screenshot: tema gelap,
+    English, nilai 60/300 benar) ✓
+  - efek klik "Pin tab" ikut terlihat di status bar ("Tab pinned (won't sleep/discard)") ✓
 
 **Userscript (jawaban atas "harus ada extension"):**
 - Terverifikasi empiris: WebView2 **tidak mendukung** extension Chromium. Detail di bawah.
@@ -96,6 +105,8 @@ history, find, PDF, MHTML).
   meng-escape kutip sebagai `\u2022`/`\u0022` — pola lama tak pernah match;
   isDiscarded kini di-anchor ke URL tab uji, bukan tab pertama).
 - `test-adblock.ps1`: regex `blokir (\d+)` → `blocked (\d+)` (label UI English).
+- Uji GUI kini memakai UI Automation + klik mouse + screenshot (bukan cuma
+  inspeksi kode) — berkat laporan pemilik soal menu mati.
 
 ## Jujur: yang belum
 

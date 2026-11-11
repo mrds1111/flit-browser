@@ -796,8 +796,12 @@ public class MainForm : Form
         return menu;
     }
 
-    private static ToolStripMenuItem Item(string text, EventHandler onClick) =>
-        new(text) { ForeColor = Color.FromArgb(232, 234, 237) };
+    private static ToolStripMenuItem Item(string text, EventHandler onClick)
+    {
+        var it = new ToolStripMenuItem(text) { ForeColor = Color.FromArgb(232, 234, 237) };
+        it.Click += onClick; // BUGFIX M6: handler lama diterima tapi tak pernah dipasang → semua item menu mati
+        return it;
+    }
 
     private void RebuildBookmarkMenu(ToolStripDropDownItem bm)
     {
