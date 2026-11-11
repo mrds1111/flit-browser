@@ -149,6 +149,33 @@ public class AgentConfig
         else if (UserAgent.Contains("Linux", StringComparison.Ordinal)) { id.Platform = "Linux x86_64"; id.UadPlatform = "Linux"; }
         // selain itu: Win32 / Windows (default field)
 
+        // userAgentData satu cerita dengan UA: versi brand + platformVersion + mobile
+        // (brands asli "Microsoft Edge WebView2" membocorkan engine saat UA menyamar)
+        id.UadMobile = UserAgent.Contains("Mobile Safari", StringComparison.Ordinal) ||
+                       UserAgent.Contains("iPhone", StringComparison.Ordinal) ||
+                       UserAgent.Contains("Android", StringComparison.Ordinal);
+        var chromeVer = System.Text.RegularExpressions.Regex.Match(UserAgent, @"Chrome/(\d+)");
+        if (chromeVer.Success)
+        {
+            var v = chromeVer.Groups[1].Value;
+            id.UadBrands = new (string, string)[]
+            {
+                ("Not?A_Brand", "24"), ("Chromium", v), ("Google Chrome", v),
+            };
+        }
+        var pv = System.Text.RegularExpressions.Regex.Match(UserAgent, @"Mac OS X (\d+[_\.]\d+[_\.]?\d*)");
+        if (pv.Success) id.UadPlatformVersion = pv.Groups[1].Value.Replace('_', '.');
+        else
+        {
+            var nt = System.Text.RegularExpressions.Regex.Match(UserAgent, @"Windows NT (\d+\.\d+)");
+            if (nt.Success) id.UadPlatformVersion = nt.Groups[1].Value + ".0";
+            else
+            {
+                var and = System.Text.RegularExpressions.Regex.Match(UserAgent, @"Android (\d+)");
+                if (and.Success) id.UadPlatformVersion = and.Groups[1].Value + ".0.0";
+            }
+        }
+
         if (id.Timezone.Length > 0)
         {
             try

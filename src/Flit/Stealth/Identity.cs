@@ -13,6 +13,10 @@ public sealed class IdentityProfile
     public string UserAgent = "";
     public string Platform = "Win32";       // navigator.platform
     public string UadPlatform = "Windows";  // navigator.userAgentData.platform
+    public string UadPlatformVersion = "";  // getHighEntropyValues("platformVersion") — kosong = teruskan native
+    public (string Brand, string Version)[] UadBrands =
+        { ("Chromium", "131"), ("Google Chrome", "131"), ("Not?A_Brand", "24") };
+    public bool UadMobile;
     public string Language = "id-ID";
     public string[] Languages = { "id-ID", "en-US" };
     public string Timezone = "";            // IANA; kosong = biarkan native
@@ -32,6 +36,9 @@ public static class Identity
             ua = p.UserAgent,
             platform = p.Platform,
             uad = p.UadPlatform,
+            uadVer = p.UadPlatformVersion,
+            brands = p.UadBrands.Select(b => new { brand = b.Brand, version = b.Version }).ToArray(),
+            mobile = p.UadMobile,
             lang = p.Language,
             langs = p.Languages,
             tz = p.Timezone,
@@ -53,19 +60,21 @@ public static class Identity
     def(navigator, 'hardwareConcurrency', I.cores);
     if(I.mem > 0) def(navigator, 'deviceMemory', I.mem);
     try{
-      var uad = navigator.userAgentData;
-      if(uad){
-        def(uad, 'platform', I.uad);
-        var orig = uad.getHighEntropyValues;
-        if(orig){
-          uad.getHighEntropyValues = function(hints){
-            return orig.call(uad, hints).then(function(d){
-              try{ d.platform = I.uad; }catch(e){}
-              return d;
-            });
-          };
+      // userAgentData: properti platform/brands adalah getter milik prototype —
+      // menimpa di objeknya GAGAL SENYAP (terbukti uji M6: masih "Windows" saat UA Mac).
+      // Solusi: bangun replika dan pasang sebagai properti own di navigator (menutupi getter prototype).
+      // Brands/mobile/platformVersion diturunkan dari UA — brands asli ("Microsoft Edge WebView2")
+      // membocorkan mesin saat UA menyamar jadi Chrome/Mac (pelajaran pola Camoufox: satu cerita).
+      var fake = {
+        brands: I.brands,
+        mobile: I.mobile,
+        platform: I.uad,
+        toJSON: function(){ return {brands:this.brands, mobile:this.mobile, platform:this.platform}; },
+        getHighEntropyValues: function(hints){
+          return Promise.resolve({platform: I.uad, platformVersion: I.uadVer || '0.0.0', architecture: 'x86', model: '', uaFullVersion: '', fullVersionList: I.brands});
         }
-      }
+      };
+      def(navigator, 'userAgentData', fake);
     }catch(e){}
     if(I.tz){
       try{
